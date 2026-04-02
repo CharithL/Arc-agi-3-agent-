@@ -264,8 +264,9 @@ def train_on_reality(
         if collect_probing_data:
             all_episode_data.append(ep_data)
 
-        # Progress logging
-        if verbose and (ep + 1) % max(1, n_episodes // 10) == 0:
+        # Progress logging (every 50 episodes or 10 intervals, whichever is more frequent)
+        log_interval = min(50, max(1, n_episodes // 10))
+        if verbose and (ep + 1) % log_interval == 0:
             recent = total_rewards[-50:]
             recent_solved = sum(1 for d in all_episode_data[-50:] if d.solved)
             recent_pred = all_pred_losses[-50:] if all_pred_losses else [0]
