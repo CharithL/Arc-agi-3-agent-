@@ -27,17 +27,20 @@ def main():
     print("CHARITH Path 3: Maze Reality Pre-Training + DESCARTES Validation")
     print("=" * 70)
 
-    # ---- Configuration ----
-    N_EPISODES = 300       # Enough to learn maze navigation
-    LEVEL = 1              # Start with 8x8 mazes (simplest)
+    # ---- Configuration (post zombie-solver fixes) ----
+    N_EPISODES = 1500      # 5x longer — spatial representations need training pressure
+    LEVEL = 1              # Level 1 = 16x16 maze (was 8x8, too easy for reactive policy)
     HIDDEN_SIZE = 256
     LR = 3e-4
+    STEP_PENALTY = -0.05   # 5x harsher — punishes inefficient wandering
+    SPATIAL_K = 5          # Predict position 5 steps ahead
 
     # ---- Initialize ----
-    print(f"\nConfig: {N_EPISODES} episodes, level={LEVEL} (8x8), hidden={HIDDEN_SIZE}")
+    print(f"\nConfig: {N_EPISODES} episodes, level={LEVEL} (16x16), hidden={HIDDEN_SIZE}")
+    print(f"Step penalty: {STEP_PENALTY}, Spatial lookahead K={SPATIAL_K}")
     print(f"Target: distance_to_goal probe delta_R^2 > 0.1\n")
 
-    reality = MazeReality(level=LEVEL)
+    reality = MazeReality(level=LEVEL, step_penalty=STEP_PENALTY)
     model = WorldModelNet(input_size=D_INPUT, hidden_size=HIDDEN_SIZE,
                           n_actions=reality.n_actions)
 
@@ -56,7 +59,9 @@ def main():
         lr=LR,
         pred_loss_weight=1.0,
         rl_loss_weight=0.5,
-        max_steps_per_episode=200,
+        spatial_loss_weight=1.0,
+        spatial_lookahead_k=SPATIAL_K,
+        max_steps_per_episode=300,
         collect_probing_data=True,
         verbose=True,
     )

@@ -53,6 +53,8 @@ def train_on_reality(
     gamma: float = 0.99,
     pred_loss_weight: float = 1.0,
     rl_loss_weight: float = 0.5,
+    spatial_loss_weight: float = 1.0,
+    spatial_lookahead_k: int = 5,
     max_steps_per_episode: int = 200,
     collect_probing_data: bool = True,
     verbose: bool = True,
@@ -98,6 +100,12 @@ def train_on_reality(
         values = []
         rewards = []
         pred_losses = []
+        spatial_losses = []
+
+        # Spatial prediction buffer: store (hidden, action_onehot) K steps ago
+        # so we can compute loss when we know the actual position K steps later
+        spatial_buffer = []  # list of (hidden_state, action_onehot, step_idx)
+        position_history = []  # list of (relative_row, relative_col) per step
 
         # Get initial percept
         percept = perception.perceive(grid)
@@ -105,8 +113,6 @@ def train_on_reality(
 
         # Identify controllable (for the encoder)
         ctrl_ids = set()
-        # In maze reality, the controllable is the uniquely-colored cell
-        # We'll detect it via the AgencyPrior after a few steps
 
         prev_encoding = None
 
@@ -134,10 +140,39 @@ def train_on_reality(
                 temperature=1.0,
             )
 
+            # Store spatial prediction: predict where we'll be in K steps
+            action_oh = torch.zeros(reality.n_actions)
+            action_oh[action] = 1.0
+            spatial_buffer.append((
+                hidden.detach().clone(), action_oh, step
+            ))
+
             # Step environment
             next_grid, reward, done, info = reality.step(action)
             next_percept = perception.perceive(next_grid)
             next_gt = reality.get_ground_truth()
+
+            # Record current position for spatial loss targets
+            position_history.append((
+                next_gt.get('controllable_relative_row', 0.0),
+                next_gt.get('controllable_relative_col', 0.0),
+            ))
+
+            # Compute spatial loss for predictions made K steps ago
+            if len(spatial_buffer) > spatial_lookahead_k:
+                old_hidden, old_action_oh, old_step = spatial_buffer[
+                    len(spatial_buffer) - 1 - spatial_lookahead_k
+                ]
+                # Actual position now (K steps after the prediction)
+                actual_pos = torch.tensor(
+                    position_history[-1], dtype=torch.float32
+                ).unsqueeze(0)
+                # Predict from old hidden state
+                predicted_pos = model.predict_future_position(
+                    old_hidden, old_action_oh.unsqueeze(0)
+                )
+                sp_loss = F.mse_loss(predicted_pos, actual_pos)
+                spatial_losses.append(sp_loss)
 
             # Record action contingency for controllable detection
             if step > 0:
@@ -202,9 +237,16 @@ def train_on_reality(
             else:
                 mean_pred_loss = torch.tensor(0.0)
 
-            # Total loss
+            # Spatial prediction loss (auxiliary head)
+            if spatial_losses:
+                mean_spatial_loss = torch.stack(spatial_losses).mean()
+            else:
+                mean_spatial_loss = torch.tensor(0.0)
+
+            # Total loss: prediction + RL + spatial auxiliary
             total_loss = (pred_loss_weight * mean_pred_loss +
-                         rl_loss_weight * (policy_loss + 0.5 * value_loss))
+                         rl_loss_weight * (policy_loss + 0.5 * value_loss) +
+                         spatial_loss_weight * mean_spatial_loss)
 
             optimizer.zero_grad()
             total_loss.backward()

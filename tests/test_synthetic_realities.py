@@ -11,7 +11,7 @@ class TestMazeResetReturnsValidGrid:
     """test_maze_reset_returns_valid_grid: grid is correct size, int dtype,
     values in valid color range."""
 
-    @pytest.mark.parametrize("level,expected_size", [(1, 8), (2, 16), (3, 32)])
+    @pytest.mark.parametrize("level,expected_size", [(0, 8), (1, 16), (2, 20), (3, 32)])
     def test_grid_size(self, level, expected_size):
         env = MazeReality(level=level, seed=42)
         obs = env.reset()
@@ -236,7 +236,7 @@ class TestMazeColorRandomization:
 class TestMazeSolvable:
     """test_maze_solvable: there exists a path from controllable to goal (BFS)."""
 
-    @pytest.mark.parametrize("level", [1, 2, 3])
+    @pytest.mark.parametrize("level", [0, 1, 2, 3])
     def test_solvable_with_multiple_seeds(self, level):
         for seed in range(20):
             env = MazeReality(level=level, seed=seed)

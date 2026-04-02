@@ -33,12 +33,15 @@ class MazeReality(SyntheticReality):
     # Available ARC-AGI-3 colors (0-12)
     AVAILABLE_COLORS = list(range(13))  # 0 through 12
 
-    def __init__(self, level: int = 1, seed: int | None = None):
-        grid_size = {1: 8, 2: 16, 3: 32}.get(level, 16)
-        max_steps = {1: 100, 2: 200, 3: 500}.get(level, 200)
+    def __init__(self, level: int = 1, seed: int | None = None,
+                 step_penalty: float = -0.01):
+        # Level 0 = 8x8 (testing only), Level 1 = 16x16, Level 2 = 20x20, Level 3 = 32x32
+        grid_size = {0: 8, 1: 16, 2: 20, 3: 32}.get(level, 16)
+        max_steps = {0: 100, 1: 300, 2: 400, 3: 800}.get(level, 300)
         super().__init__(grid_size=grid_size, n_actions=4, max_steps=max_steps)
 
         self.level = level
+        self._step_penalty = step_penalty
         self._rng = np.random.RandomState(seed)
 
         # Color assignments (randomized each reset)
@@ -109,7 +112,7 @@ class MazeReality(SyntheticReality):
             self._ctrl_col = new_col
 
         # Compute reward
-        reward = -0.01
+        reward = self._step_penalty
         done = False
         info: Dict[str, Any] = {}
 
