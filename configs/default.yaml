@@ -1,0 +1,25 @@
+# CHARITH Agent — Default Configuration
+# See guide Section 10.2 for parameter descriptions
+
+# World Model
+max_rules: 10000
+rule_decay_ticks: 500
+
+# Ontology Expansion (4-test protocol)
+ontology_window: 50
+residual_r2_threshold: 0.1
+volatility_sigma_multiplier: 2.0
+uncertainty_patience: 20
+capacity_growth_threshold: 0.1
+
+# Thompson Sampling
+info_gain_weight: 0.5
+explore_threshold: 0.3
+
+# Memory
+wm_capacity: 7
+max_episodes: 5000
+
+# Agent Loop
+ontology_check_interval: 50
+goal_hypothesis_delay: 20
