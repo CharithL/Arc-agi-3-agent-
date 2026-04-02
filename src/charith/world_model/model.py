@@ -79,16 +79,36 @@ class TransitionRule:
                 self._observation_history = self._observation_history[-50:]
 
     def _effects_match(self, observed: List[ObjectEffect]) -> bool:
-        """Check whether the observed effects match the expected effects."""
-        if len(observed) != len(self.effects):
+        """Check whether the observed effects match the expected effects.
+
+        Relaxed matching: compare only the SIGNIFICANT effects (objects
+        that actually moved, appeared, or disappeared). Static objects
+        with d=(0,0) are ignored — they don't carry information.
+        """
+        def significant(effects: List[ObjectEffect]) -> List[ObjectEffect]:
+            return [e for e in effects
+                    if e.displacement != (0, 0)
+                    or e.appeared or e.disappeared
+                    or e.shape_changed or e.size_delta != 0]
+
+        sig_expected = significant(self.effects)
+        sig_observed = significant(observed)
+
+        # If no significant effects in either, they match (both static)
+        if not sig_expected and not sig_observed:
+            return True
+
+        # Compare significant effects by color and displacement
+        if len(sig_expected) != len(sig_observed):
             return False
+
         for exp, obs in zip(
-            sorted(self.effects, key=lambda e: e.object_color),
-            sorted(observed, key=lambda e: e.object_color),
+            sorted(sig_expected, key=lambda e: (e.object_color, e.displacement)),
+            sorted(sig_observed, key=lambda e: (e.object_color, e.displacement)),
         ):
-            if exp.displacement != obs.displacement:
+            if exp.object_color != obs.object_color:
                 return False
-            if exp.shape_changed != obs.shape_changed:
+            if exp.displacement != obs.displacement:
                 return False
         return True
 
@@ -148,15 +168,23 @@ class WorldModel:
         context: Dict[str, Any] = {
             'background_color': percept.background_color,
             'object_count': percept.object_count,
-            'unique_colors': percept.unique_colors,
+            # Store color count as int, not the set itself (sets break equality)
+            'n_unique_colors': len(percept.unique_colors) if isinstance(percept.unique_colors, set) else percept.unique_colors,
         }
 
         for obj in percept.objects:
             if obj.object_id in controllable_ids:
-                # Spatial relations involving this controllable object
+                # Spatial relations: store relation TYPE and neighbor COLOR
+                # (not object IDs which change between ticks)
                 for rel in percept.spatial_relations:
                     if rel.obj_a_id == obj.object_id:
-                        context[f'adjacent_{rel.relation}'] = rel.obj_b_id
+                        # Find the neighbor's color
+                        neighbor = next(
+                            (o for o in percept.objects if o.object_id == rel.obj_b_id),
+                            None
+                        )
+                        if neighbor is not None:
+                            context[f'ctrl_{rel.relation}_color'] = neighbor.color
 
                 # Proportional position features (relative to grid size)
                 context['ctrl_near_top'] = (
@@ -241,6 +269,14 @@ class WorldModel:
 
         return effects
 
+    @staticmethod
+    def _significant_effects(effects: List[ObjectEffect]) -> List[ObjectEffect]:
+        """Filter to only effects that carry information (moved/appeared/etc)."""
+        return [e for e in effects
+                if e.displacement != (0, 0)
+                or e.appeared or e.disappeared
+                or e.shape_changed or e.size_delta != 0]
+
     # ------------------------------------------------------------------
     # Prediction
     # ------------------------------------------------------------------
@@ -279,10 +315,12 @@ class WorldModel:
                 return
 
         # No matching rule -- create a new one
+        # Store only significant effects (moved/appeared/disappeared)
+        sig = self._significant_effects(observed_effects)
         new_rule = TransitionRule(
             action=action,
             context_features=context.copy(),
-            effects=observed_effects,
+            effects=sig,
             confidence=1.0,
             successes=1,
             total=1,

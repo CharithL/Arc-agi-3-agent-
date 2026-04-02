@@ -75,7 +75,7 @@ class TestWorldModelLearnsSimpleTransition:
     def test_world_model_learns_simple_transition(self):
         wm = WorldModel()
         context = {"background_color": 0, "object_count": 1,
-                   "unique_colors": {0, 1}}
+                   "n_unique_colors": 2}
         effects = [ObjectEffect(
             object_color=1, displacement=(0, 1),
             shape_changed=False, size_delta=0,
@@ -99,7 +99,7 @@ class TestWorldModelNoPredictionForUnseen:
     def test_world_model_no_prediction_for_unseen(self):
         wm = WorldModel()
         context = {"background_color": 0, "object_count": 1,
-                   "unique_colors": {0, 1}}
+                   "n_unique_colors": 2}
         # Never trained on action 7
         prediction = wm.predict(action=7, context=context)
         assert prediction is None
@@ -121,11 +121,11 @@ class TestWorldModelContextMatters:
             appeared=False, disappeared=False,
         )]
 
-        # Context B: object near bottom, wall right
+        # Context B: object near bottom, wall right — blocked, moves left instead
         context_b = {"background_color": 0, "object_count": 1,
                      "ctrl_near_top": False, "ctrl_near_bottom": True}
         effects_b = [ObjectEffect(
-            object_color=1, displacement=(0, 0),
+            object_color=1, displacement=(0, -1),
             shape_changed=False, size_delta=0,
             appeared=False, disappeared=False,
         )]
@@ -141,10 +141,10 @@ class TestWorldModelContextMatters:
         assert pred_a is not None
         assert pred_a[0].displacement == (0, 1)
 
-        # Predict with context B -> displacement (0,0)
+        # Predict with context B -> displacement (0,-1)
         pred_b = wm.predict(action=3, context=context_b)
         assert pred_b is not None
-        assert pred_b[0].displacement == (0, 0)
+        assert pred_b[0].displacement == (0, -1)
 
 
 class TestWorldModelRelativeContextOnly:
@@ -175,7 +175,7 @@ class TestWorldModelRelativeContextOnly:
         # Should contain relative features
         assert "background_color" in context
         assert "object_count" in context
-        assert "unique_colors" in context
+        assert "n_unique_colors" in context
 
 
 class TestComputeEffectsDetectsMovement:
