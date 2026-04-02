@@ -8,6 +8,8 @@ dependencies = [
     "scipy>=1.10",
     "pyyaml>=6.0",
     "arc-agi>=0.9",
+    "torch>=2.11.0",
+    "scikit-learn>=1.8.0",
 ]
 
 [project.optional-dependencies]
