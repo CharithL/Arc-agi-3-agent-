@@ -158,6 +158,10 @@ class CHARITHAgent:
             # ===== PARSE NEXT OBSERVATION =====
             grid = self._parse_observation(step_result)
 
+            # Update available actions from SDK frame
+            if hasattr(step_result, 'available_actions') and step_result.available_actions:
+                self._available_actions = step_result.available_actions
+
             # ===== PROCESS FEEDBACK =====
             score = self._extract_score(step_result)
             level_complete = self._check_level_complete(step_result)
@@ -303,8 +307,11 @@ class CHARITHAgent:
             goal_action = self._goal_to_action(best_goal, percept)
 
         s_hash = self._state_hash(grid)
+        # Map SDK action indices (1-7) to our 0-indexed space
+        avail = self._map_available_actions(self._available_actions)
         action = self.explorer.select_action(
             context_hash=s_hash,
+            available_actions=avail if avail else None,
             goal_directed=goal_directed,
             goal_action=goal_action,
             prev_action=self._last_action if self._total_actions > 0 else None,
@@ -321,7 +328,11 @@ class CHARITHAgent:
 
     def _compute_object_error(self, predicted: Optional[List[ObjectEffect]],
                                actual: List[ObjectEffect]) -> PredictionError:
-        """Compute error at the object level."""
+        """Compute error at the object level using significant effects only.
+
+        Compares only effects that carry information (moved, appeared,
+        disappeared, shape changed). Static d=(0,0) objects are noise.
+        """
         if predicted is None:
             return PredictionError(
                 predicted_grid=None, observed_grid=None,
@@ -331,18 +342,36 @@ class CHARITHAgent:
 
         self.world_model._total_predictions += 1
 
+        # Filter to significant effects only
+        sig_pred = self.world_model._significant_effects(predicted)
+        sig_actual = self.world_model._significant_effects(actual)
+
+        # Both predict "nothing moves" and nothing moved = correct
+        if not sig_pred and not sig_actual:
+            self.world_model._correct_predictions += 1
+            return PredictionError(
+                predicted_grid=None, observed_grid=None,
+                error_magnitude=0.0, error_cells=[],
+                precision=0.8, weighted_error=0.0, is_novel=False
+            )
+
+        # Match significant effects by color + displacement
         matches = 0
-        total = max(len(predicted), len(actual), 1)
-        for p_eff in predicted:
-            for a_eff in actual:
+        total = max(len(sig_pred), len(sig_actual), 1)
+        used = set()
+        for p_eff in sig_pred:
+            for i, a_eff in enumerate(sig_actual):
+                if i in used:
+                    continue
                 if (p_eff.object_color == a_eff.object_color
                         and p_eff.displacement == a_eff.displacement):
                     matches += 1
+                    used.add(i)
                     break
 
         accuracy = matches / total
         magnitude = 1.0 - accuracy
-        precision = 0.5
+        precision = min(0.9, 0.3 + 0.1 * len(sig_pred))  # More effects = higher precision
 
         if magnitude < 0.01:
             self.world_model._correct_predictions += 1
@@ -353,6 +382,17 @@ class CHARITHAgent:
             precision=precision, weighted_error=magnitude * precision,
             is_novel=False
         )
+
+    @staticmethod
+    def _map_available_actions(sdk_actions) -> Optional[List[int]]:
+        """Map SDK GameAction values (1-7) to our 0-indexed action space.
+
+        SDK returns [1, 2, 3, 4] meaning GameAction.ACTION1-ACTION4.
+        We map to [0, 1, 2, 3] for Thompson Sampler.
+        """
+        if not sdk_actions:
+            return None
+        return [a - 1 for a in sdk_actions if isinstance(a, int) and 1 <= a <= 7]
 
     def _goal_to_action(self, goal, percept: StructuredPercept) -> Optional[int]:
         """Map a goal hypothesis to a concrete action. Phase 2: proper planning."""
