@@ -2,11 +2,12 @@
 name = "charith-arc-agent"
 version = "0.1.0"
 description = "CHARITH: Core-knowledge Hierarchical Agent for Reasoning in Turn-based Interactive Tasks with Heuristics"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "numpy>=1.24",
     "scipy>=1.10",
     "pyyaml>=6.0",
+    "arc-agi>=0.9",
 ]
 
 [project.optional-dependencies]

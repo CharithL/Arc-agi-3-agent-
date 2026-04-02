@@ -349,6 +349,8 @@ _GAME_REGISTRY: dict[str, type[MockEnvironment]] = {
 class MockArcade:
     """Factory that creates mock environments and tracks aggregate stats."""
 
+    GAME_IDS = set(_GAME_REGISTRY.keys())
+
     def __init__(self) -> None:
         self._total_actions: int = 0
         self._levels_completed: int = 0

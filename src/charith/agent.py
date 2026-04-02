@@ -101,22 +101,46 @@ class CHARITHAgent:
             max_actions: maximum total actions before giving up
             render: whether to render in terminal (not implemented for mock)
         """
-        # Try real SDK first, fall back to mock
-        try:
-            import arc_agi
-            arcade = arc_agi.Arcade()
-            env = arcade.make(game_id, render_mode="terminal" if render else None)
-        except ImportError:
-            from charith.mock_env import MockArcade
+        # Determine if this is a mock game or real ARC-AGI-3 game
+        from charith.mock_env import MockArcade
+        MOCK_GAMES = MockArcade.GAME_IDS
+
+        self._use_real_sdk = False
+        if game_id not in MOCK_GAMES:
+            try:
+                import arc_agi
+                from arcengine import GameAction
+                arcade = arc_agi.Arcade()
+                env = arcade.make(game_id, render_mode="terminal" if render else None)
+                self._use_real_sdk = True
+                self._game_action_map = {
+                    0: GameAction.ACTION1, 1: GameAction.ACTION2,
+                    2: GameAction.ACTION3, 3: GameAction.ACTION4,
+                    4: GameAction.ACTION5, 5: GameAction.ACTION6,
+                    6: GameAction.ACTION7,
+                }
+            except Exception:
+                arcade = MockArcade()
+                env = arcade.make(game_id)
+                self._game_action_map = None
+        else:
             arcade = MockArcade()
             env = arcade.make(game_id)
+            self._game_action_map = None
 
         self._hard_reset()
 
+        # Real SDK: call reset() to get initial observation
+        # Mock: call get_observation() directly
+        if self._use_real_sdk:
+            initial_frame = env.reset()
+            grid = self._parse_observation(initial_frame)
+            self._available_actions = getattr(initial_frame, 'available_actions', list(range(N_ACTIONS)))
+        else:
+            grid = self._parse_observation(env.get_observation())
+            self._available_actions = list(range(N_ACTIONS))
+
         for action_num in range(max_actions):
-            # ===== OBSERVE =====
-            observation = env.get_observation()
-            grid = self._parse_observation(observation)
             if grid is None:
                 break
 
@@ -124,7 +148,15 @@ class CHARITHAgent:
             action = self._tick_cycle(grid)
 
             # ===== ACT =====
-            step_result = env.step(action)
+            # Map action int to GameAction for real SDK
+            if self._game_action_map and action in self._game_action_map:
+                game_action = self._game_action_map[action]
+            else:
+                game_action = action
+            step_result = env.step(game_action)
+
+            # ===== PARSE NEXT OBSERVATION =====
+            grid = self._parse_observation(step_result)
 
             # ===== PROCESS FEEDBACK =====
             score = self._extract_score(step_result)
@@ -133,15 +165,16 @@ class CHARITHAgent:
 
             # ===== REWARD (Amendment 3: discriminating hypotheses) =====
             reward = self.goal_discovery.update(
-                grid, action, score=score,
+                grid if grid is not None else np.zeros((1, 1), dtype=int),
+                action, score=score,
                 level_complete=level_complete, game_over=game_over,
                 percept_prev=self._prev_percept,
-                percept_curr=self.perception.perceive(grid) if self._prev_percept else None,
+                percept_curr=self.perception.perceive(grid) if (self._prev_percept and grid is not None) else None,
             )
 
             # ===== UPDATE EXPLORATION =====
             self.explorer.update(
-                context_hash=self._state_hash(grid),
+                context_hash=self._state_hash(grid) if grid is not None else 0,
                 action=action,
                 reward=reward,
                 info_gain=self._last_info_gain,
@@ -161,6 +194,10 @@ class CHARITHAgent:
                 break
 
             self._total_actions += 1
+
+            # For mock env, get next observation separately
+            if not self._use_real_sdk:
+                grid = self._parse_observation(env.get_observation())
 
         return arcade.get_scorecard()
 
@@ -364,29 +401,42 @@ class CHARITHAgent:
         self._levels_completed = 0
 
     def _parse_observation(self, observation) -> Optional[np.ndarray]:
-        """Parse observation into numpy grid."""
+        """
+        Parse observation into numpy grid.
+
+        Handles:
+        - np.ndarray directly (mock env)
+        - FrameDataRaw from real SDK (grid in .frame[0])
+        - dict with 'grid' key
+        """
         if observation is None:
             return None
         if isinstance(observation, np.ndarray):
-            return observation
+            return observation.astype(int)
+        # Real SDK: FrameDataRaw has .frame attribute (list of numpy arrays)
+        if hasattr(observation, 'frame') and observation.frame:
+            grid = observation.frame[0]
+            if isinstance(grid, np.ndarray):
+                return grid.astype(int)
         if isinstance(observation, dict):
             if 'grid' in observation:
-                return np.array(observation['grid'])
+                return np.array(observation['grid'], dtype=int)
             if 'board' in observation:
-                return np.array(observation['board'])
+                return np.array(observation['board'], dtype=int)
         try:
-            return np.array(observation)
+            return np.array(observation, dtype=int)
         except (ValueError, TypeError):
             return None
 
     def _extract_score(self, step_result) -> Optional[float]:
-        """Extract score from step result."""
+        """Extract score from step result (mock dict or SDK FrameDataRaw)."""
         if step_result is None:
             return None
         if isinstance(step_result, dict):
             return step_result.get('score', step_result.get('reward', None))
-        if hasattr(step_result, 'score'):
-            return step_result.score
+        # Real SDK: FrameDataRaw has levels_completed (use as proxy for score)
+        if hasattr(step_result, 'levels_completed'):
+            return float(step_result.levels_completed)
         return None
 
     def _check_level_complete(self, step_result) -> bool:
@@ -394,14 +444,25 @@ class CHARITHAgent:
             return False
         if isinstance(step_result, dict):
             return step_result.get('level_complete', False)
-        return getattr(step_result, 'level_complete', False)
+        # Real SDK: check if levels_completed changed
+        if hasattr(step_result, 'levels_completed'):
+            new_levels = step_result.levels_completed
+            if new_levels > self._levels_completed:
+                return True
+        return False
 
     def _check_game_over(self, step_result) -> bool:
         if step_result is None:
             return False
         if isinstance(step_result, dict):
             return step_result.get('game_over', step_result.get('done', False))
-        return getattr(step_result, 'done', False)
+        # Real SDK: GameState.FINISHED or GameState.WON
+        if hasattr(step_result, 'state'):
+            state_val = str(step_result.state)
+            if 'FINISHED' in state_val or 'WON' in state_val or 'LOST' in state_val:
+                if 'NOT_FINISHED' not in state_val:
+                    return True
+        return False
 
     def _state_hash(self, grid: np.ndarray) -> int:
         """Fast hash for dictionary lookups."""
