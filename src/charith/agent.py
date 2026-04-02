@@ -38,6 +38,7 @@ from charith.metacognition.goal_discovery import GoalDiscovery
 from charith.metacognition.confidence import ConfidenceTracker
 from charith.action.thompson import ThompsonSampler
 from charith.action.action_space import N_ACTIONS
+from charith.utils.diagnostics import DiagnosticLogger, TickLog
 from charith.memory.working import WorkingMemory
 from charith.memory.episodic import EpisodeStore
 from charith.memory.sequences import ActionSequenceMemory
@@ -53,8 +54,10 @@ class CHARITHAgent:
         scorecard = agent.play_game("deterministic_movement")
     """
 
-    def __init__(self, config_path: Optional[str] = None):
+    def __init__(self, config_path: Optional[str] = None,
+                 diagnostic_logger: Optional[DiagnosticLogger] = None):
         self.config = self._load_config(config_path)
+        self.diagnostic_logger = diagnostic_logger
 
         # Initialize modules
         self.perception = CoreKnowledgePerception()
@@ -140,6 +143,18 @@ class CHARITHAgent:
             grid = self._parse_observation(env.get_observation())
             self._available_actions = list(range(N_ACTIONS))
 
+        # Diagnostic: game start
+        if self.diagnostic_logger and grid is not None:
+            total_lvls = 0
+            if self._use_real_sdk and hasattr(initial_frame, 'win_levels'):
+                total_lvls = initial_frame.win_levels
+            self.diagnostic_logger.on_game_start(
+                game_id=game_id,
+                grid_size=grid.shape if grid is not None else (0, 0),
+                available_actions=self._available_actions,
+                total_levels=total_lvls,
+            )
+
         for action_num in range(max_actions):
             if grid is None:
                 break
@@ -203,6 +218,15 @@ class CHARITHAgent:
             if not self._use_real_sdk:
                 grid = self._parse_observation(env.get_observation())
 
+        # Diagnostic: game end
+        if self.diagnostic_logger:
+            self.diagnostic_logger.on_game_end(
+                total_ticks=self._total_actions,
+                accuracy=self.world_model.get_accuracy(),
+                rules=self.world_model.get_rule_count(),
+                expansions=self.ontology._expansion_count,
+            )
+
         return arcade.get_scorecard()
 
     def _tick_cycle(self, grid: np.ndarray) -> int:
@@ -212,6 +236,8 @@ class CHARITHAgent:
         PERCEIVE -> TRACK -> CONTEXT -> PREDICT -> EFFECTS -> ERROR ->
         UPDATE -> CONTINGENCY -> META -> GOAL -> SELECT
         """
+        self._ontology_triggered_this_tick = False
+
         # 1. PERCEIVE: Apply core knowledge priors
         percept = self.perception.perceive(grid)
 
@@ -293,6 +319,7 @@ class CHARITHAgent:
                 )
                 self.logger.log('ontology_expansion',
                                expansion_result.suggested_type, self._tick)
+                self._ontology_triggered_this_tick = True
 
         # 12. UPDATE CONFIDENCE
         self.confidence.update(error.error_magnitude,
@@ -317,6 +344,31 @@ class CHARITHAgent:
             prev_action=self._last_action if self._total_actions > 0 else None,
             sequence_memory=self.sequence_memory,
         )
+
+        # 14. DIAGNOSTIC LOG
+        if self.diagnostic_logger:
+            controllable = self._controllable_ids
+            self.diagnostic_logger.on_tick(TickLog(
+                tick=self._tick,
+                action_taken=action,
+                available_actions=self._available_actions,
+                prediction_correct=(error.error_magnitude < 0.1),
+                prediction_confidence=1.0 - error.error_magnitude,
+                error_magnitude=error.weighted_error,
+                num_objects=percept.object_count,
+                num_controllable=len(controllable),
+                controllable_positions=[
+                    obj.centroid for obj in percept.objects
+                    if obj.object_id in controllable
+                ],
+                rule_count=self.world_model.get_rule_count(),
+                goal_hypothesis=best_goal.description if best_goal else None,
+                goal_confidence=best_goal.confidence if best_goal else 0.0,
+                ontology_expansion_triggered=self._ontology_triggered_this_tick,
+                score=None,
+                level_complete=False,
+                state_hash=self._state_hash(grid),
+            ))
 
         # Update state
         self._prev_grid = grid.copy()
@@ -402,6 +454,15 @@ class CHARITHAgent:
         """Handle level completion — soft reset."""
         self._levels_completed += 1
         self.logger.log('level_complete', self._levels_completed, self._tick)
+
+        # Diagnostic: level complete
+        if self.diagnostic_logger:
+            self.diagnostic_logger.on_level_complete(
+                tick=self._tick,
+                rules=self.world_model.get_rule_count(),
+                accuracy=self.world_model.get_accuracy(),
+                expansions=self.ontology._expansion_count,
+            )
 
         # Soft reset: keep learned rules and hypotheses
         self.perception.reset()
