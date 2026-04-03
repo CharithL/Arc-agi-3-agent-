@@ -1,0 +1,19 @@
+{
+  "config": {
+    "episodes": 1500,
+    "train_time": 5298,
+    "solve_rate": 1.0
+  },
+  "results": {
+    "ls20": {"pretrained": 0.0993, "random": 0.113, "improvement": 12.1},
+    "tr87": {"pretrained": 0.1148, "random": 0.1347, "improvement": 14.8},
+    "g50t": {"pretrained": 0.0482, "random": 0.0593, "improvement": 18.8},
+    "wa30": {"pretrained": 0.055, "random": 0.0692, "improvement": 20.6},
+    "re86": {"pretrained": 0.0838, "random": 0.0978, "improvement": 14.3}
+  },
+  "summary": {
+    "avg_improvement_pct": 16.1,
+    "games_helped": "5/5",
+    "verdict": "TRANSFERS"
+  }
+}
