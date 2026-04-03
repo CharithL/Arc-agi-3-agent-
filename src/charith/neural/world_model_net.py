@@ -122,3 +122,16 @@ class WorldModelNet(nn.Module):
     def get_hidden_state(self, hidden: torch.Tensor) -> torch.Tensor:
         """Extract the last layer's hidden state for DESCARTES probing."""
         return hidden[-1]  # [batch, hidden_size] -- last layer
+
+    def get_hidden_flat(self, hidden: torch.Tensor) -> torch.Tensor:
+        """Flatten ALL layers' hidden states for Mirror model input.
+
+        Args:
+            hidden: [num_layers, batch, hidden_size]
+        Returns:
+            [batch, num_layers * hidden_size] — all layers concatenated
+        """
+        # hidden shape: [num_layers, batch, hidden_size]
+        return hidden.permute(1, 0, 2).reshape(
+            hidden.shape[1], self.num_layers * self.hidden_size
+        )
