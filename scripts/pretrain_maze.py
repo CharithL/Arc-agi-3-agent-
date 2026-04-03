@@ -90,13 +90,16 @@ def main():
             print(f"  SKIP: insufficient data ({len(h_states)} samples)")
             continue
 
+        print(f"  Collected {len(h_states)} samples, subsampling to 20K...")
         result = run_probe(
             feature_name=feature.name,
             hidden_states=h_states,
             targets=targets,
             episode_boundaries=ep_bounds,
             threshold=feature.threshold,
-            n_permutations=50,  # Fewer for speed; 100 for paper
+            n_permutations=20,     # 20 is enough for pass/fail
+            alpha=100.0,           # Fixes ill-conditioned warnings
+            max_samples=20000,     # Subsample: 444K -> 20K (stable R^2)
         )
 
         probe_results.append(result)

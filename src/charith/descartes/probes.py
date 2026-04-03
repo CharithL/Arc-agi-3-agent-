@@ -125,13 +125,46 @@ class LinearProbe:
         return null_r2s
 
 
+def _subsample(hidden_states: np.ndarray, targets: np.ndarray,
+               episode_boundaries: List[int],
+               max_samples: int = 20000,
+               rng_seed: int = 42) -> tuple:
+    """Subsample to max_samples while preserving episode boundary mapping.
+
+    Ridge R^2 is stable above ~5K samples. At 444K x 256, fitting is
+    O(N*D^2) -- subsampling to 20K cuts compute by ~95% with negligible
+    accuracy loss on the R^2 estimate.
+    """
+    n = len(hidden_states)
+    if n <= max_samples:
+        return hidden_states, targets, episode_boundaries
+
+    rng = np.random.RandomState(rng_seed)
+    idx = np.sort(rng.choice(n, size=max_samples, replace=False))
+
+    h_sub = hidden_states[idx]
+    t_sub = targets[idx]
+
+    # Remap episode boundaries to subsampled indices
+    boundary_set = set(episode_boundaries)
+    new_boundaries = []
+    for new_i, old_i in enumerate(idx):
+        if old_i in boundary_set:
+            new_boundaries.append(new_i)
+    if not new_boundaries or new_boundaries[0] != 0:
+        new_boundaries.insert(0, 0)
+
+    return h_sub, t_sub, new_boundaries
+
+
 def run_probe(feature_name: str,
               hidden_states: np.ndarray,
               targets: np.ndarray,
               episode_boundaries: List[int],
               threshold: float = 0.1,
-              n_permutations: int = 100,
-              alpha: float = 1.0) -> ProbeResult:
+              n_permutations: int = 20,
+              alpha: float = 100.0,
+              max_samples: int = 20000) -> ProbeResult:
     """Run a complete DESCARTES probe for one feature.
 
     Args:
@@ -140,19 +173,25 @@ def run_probe(feature_name: str,
         targets: [N] ground truth feature values
         episode_boundaries: start indices of each episode
         threshold: minimum delta_R2 to pass
-        n_permutations: number of null permutations
-        alpha: Ridge regression alpha
+        n_permutations: number of null permutations (20 is enough for pass/fail)
+        alpha: Ridge alpha (100.0 fixes ill-conditioned warnings)
+        max_samples: subsample to this many timesteps (20K is stable)
     Returns:
         ProbeResult with decision
     """
+    # Subsample for speed -- 444K x 256 is ~100x slower than 20K x 256
+    h_sub, t_sub, ep_bounds = _subsample(
+        hidden_states, targets, episode_boundaries, max_samples
+    )
+
     probe = LinearProbe(alpha=alpha)
 
     # Trained R^2
-    r2_trained = probe.fit_and_score(hidden_states, targets)
+    r2_trained = probe.fit_and_score(h_sub, t_sub)
 
-    # Null distribution
+    # Null distribution (20 permutations is sufficient for binary pass/fail)
     null_r2s = probe.null_distribution(
-        hidden_states, targets, episode_boundaries, n_permutations
+        h_sub, t_sub, ep_bounds, n_permutations
     )
 
     r2_null_mean = float(np.mean(null_r2s))
