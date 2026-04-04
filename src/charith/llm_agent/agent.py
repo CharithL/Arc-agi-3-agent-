@@ -308,17 +308,24 @@ class LLMAgent:
             grid = self._parse_observation(frame)
             action = self.act(grid)
 
-            # Log what the LLM decided
+            # Log what the LLM decided — include position + goal distance
             h = self.c1c2.hypotheses[-1] if self.c1c2.hypotheses else None
             last_hyp = (h.text if hasattr(h, 'text') else h.get('text', '?')) if h else 'none'
             last_conf = (h.confidence if hasattr(h, 'confidence') else h.get('confidence', '?')) if h else '?'
-            effects = self.context.get_discovered_effects()
             n_c1 = len(self.c1c2.c1_expansions)
-            effects = "; ".join(
-                f"A{k}:{list(v.keys())[0][:25]}({list(v.values())[0]}x)" if v else f"A{k}:?"
-                for k, v in self.context.action_effect_map.items()
-            )
-            print(f"  [Tick {step+1:2d}] ACTION={action} | hyp: {last_hyp[:60]} ({last_conf}) | C1+={n_c1} | effects: {effects[:80]}")
+
+            # Get controllable position
+            ctrl_pos = "?"
+            for obj in self.perception.perceive(grid).objects:
+                if obj.object_id in self._controllable_ids:
+                    ctrl_pos = f"({obj.centroid[0]:.0f},{obj.centroid[1]:.0f})"
+                    break
+
+            # Get goal distance + progress direction
+            goal_dist = self.translator._prev_goal_distance
+            dist_str = f"{goal_dist:.1f}" if goal_dist is not None else "?"
+
+            print(f"  [Tick {step+1:2d}] ACTION={action} | pos={ctrl_pos} | goal_dist={dist_str} | hyp: {last_hyp[:55]} ({last_conf})")
 
             # Map action int to GameAction
             action_map = {
