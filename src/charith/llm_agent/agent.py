@@ -18,7 +18,7 @@ from charith.perception.object_tracker import ObjectTracker
 from charith.llm_agent.translator import PerceptTranslator
 from charith.llm_agent.c1c2_framework import C1C2Framework
 from charith.llm_agent.context_manager import ContextManager
-from charith.llm_agent.ollama_client import OllamaClient
+from charith.llm_agent.llm_client import LLMClient
 from charith.llm_agent.response_parser import ResponseParser
 
 
@@ -96,7 +96,7 @@ class LLMAgent:
         self.translator = PerceptTranslator()
         self.c1c2 = C1C2Framework()
         self.context = ContextManager()
-        self.llm = OllamaClient(model=model, temperature=temperature)
+        self.llm = LLMClient(model=model, temperature=temperature)
         self.parser = ResponseParser()
 
         # State tracking
@@ -180,6 +180,13 @@ class LLMAgent:
         # 9. Parse LLM response
         parsed = self.parser.parse(response_text, self._available_actions)
 
+        # Force exploration: cycle through actions in first N ticks
+        n_explore = len(self._available_actions) * 2  # Try each action twice
+        if self._tick < n_explore:
+            forced_action = self._available_actions[self._tick % len(self._available_actions)]
+            parsed['action'] = forced_action
+            parsed['reasoning'] = f"[FORCED EXPLORE tick {self._tick}] " + parsed.get('reasoning', '')
+
         # 10. Update C1/C2
         if parsed["hypothesis"]:
             self.c1c2.update_hypothesis(parsed["hypothesis"], parsed["confidence"])
@@ -248,6 +255,15 @@ class LLMAgent:
         for step in range(max_actions):
             grid = self._parse_observation(frame)
             action = self.act(grid)
+
+            # Log what the LLM decided
+            h = self.c1c2.hypotheses[-1] if self.c1c2.hypotheses else None
+            last_hyp = (h.text if hasattr(h, 'text') else h.get('text', '?')) if h else 'none'
+            last_conf = (h.confidence if hasattr(h, 'confidence') else h.get('confidence', '?')) if h else '?'
+            effects = self.context.get_discovered_effects()
+            n_c1 = len(self.c1c2.c1_expansions)
+            effects = "; ".join(f"A{k}:{v[:30]}" for k, v in self.context.action_effect_map.items())
+            print(f"  [Tick {step+1:2d}] ACTION={action} | hyp: {last_hyp[:60]} ({last_conf}) | C1+={n_c1} | effects: {effects[:80]}")
 
             # Map action int to GameAction
             action_map = {
