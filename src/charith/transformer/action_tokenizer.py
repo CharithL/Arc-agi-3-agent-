@@ -23,7 +23,8 @@ class ActionTokenizer(nn.Module):
         """Convert action+reward+done to token vector.
         Returns: [D_model] tensor
         """
-        features = torch.zeros(self.n_actions + 2)
+        dev = next(self.parameters()).device
+        features = torch.zeros(self.n_actions + 2, device=dev)
         features[action] = 1.0  # one-hot
         features[self.n_actions] = reward
         features[self.n_actions + 1] = float(done)

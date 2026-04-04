@@ -124,6 +124,8 @@ class PerceptTokenizer(nn.Module):
             features.extend([0.0] * 8)  # No change info for first tick
 
         x = torch.tensor(features, dtype=torch.float32)
+        # Move to same device as model weights
+        x = x.to(next(self.parameters()).device)
         return self.projection(x)
 
     def reset(self):
