@@ -2,28 +2,31 @@
   "game_id": "ar25-e3c63847",
   "short": "ar25",
   "c1_expansions": 0,
-  "max_confidence": "low",
+  "max_confidence": "med",
   "working_actions": 5,
-  "min_goal_dist": 18.67832968977687,
+  "min_goal_dist": 22.088005795001052,
   "controllable_detected": true,
   "levels_completed": 0,
-  "final_hypothesis": "Exploring to discover game mechanics",
+  "final_hypothesis": "The yellow object at top-right (22 cells away,",
   "actions_taken": 100,
-  "elapsed_seconds": 14.4,
+  "elapsed_seconds": 599.3,
   "action_effects": {
     "1": {
-      "109 pixels changed": 1,
-      "Controllable moved UP by 3 cells": 1,
-      "Controllable moved DOWN-RIGHT by 18 cells": 1
+      "Controllable moved DOWN-RIGHT by 18 cells": 3,
+      "Controllable moved DOWN-RIGHT by 19 cells": 4,
+      "Controllable moved DOWN-RIGHT by 15 cells": 2
     },
     "2": {
-      "Controllable moved DOWN by 0 cells": 2
+      "Controllable moved UP-RIGHT by 37 cells": 2,
+      "Controllable moved UP-RIGHT by 34 cells": 2,
+      "Controllable moved UP-RIGHT by 33 cells": 3
     },
     "3": {
-      "Controllable moved DOWN by 0 cells": 2
+      "Controllable moved DOWN by 0 cells": 7,
+      "No movement (wall?)": 1
     },
     "4": {
-      "Controllable moved DOWN by 0 cells": 2
+      "Controllable moved DOWN by 0 cells": 3
     },
     "5": {
       "Controllable moved DOWN by 0 cells": 2

@@ -24,10 +24,13 @@ class LLMClient:
                 import anthropic
                 self._client = anthropic.Anthropic(api_key=api_key)
                 self._backend = "anthropic"
-                if model == "auto" or model == "haiku":
-                    self._model = "claude-haiku-4-5-20251001"
-                else:
-                    self._model = model
+                MODEL_MAP = {
+                    "auto": "claude-sonnet-4-20250514",
+                    "haiku": "claude-haiku-4-5-20251001",
+                    "sonnet": "claude-sonnet-4-20250514",
+                    "opus": "claude-opus-4-6",
+                }
+                self._model = MODEL_MAP.get(model, model)
                 print(f"[LLM] Using Anthropic API ({self._model})")
                 return
             except Exception as e:
@@ -74,7 +77,11 @@ class LLMClient:
         response = self._client.messages.create(
             model=self._model,
             max_tokens=self.max_tokens,
-            system=system_prompt,
+            system=[{
+                "type": "text",
+                "text": system_prompt,
+                "cache_control": {"type": "ephemeral"},
+            }],
             messages=[{"role": "user", "content": user_prompt}],
             temperature=self.temperature,
         )
