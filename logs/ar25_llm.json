@@ -1,0 +1,39 @@
+{
+  "game_id": "ar25-e3c63847",
+  "short": "ar25",
+  "c1_expansions": 0,
+  "max_confidence": "low",
+  "working_actions": 5,
+  "min_goal_dist": 18.67832968977687,
+  "controllable_detected": true,
+  "levels_completed": 0,
+  "final_hypothesis": "Exploring to discover game mechanics",
+  "actions_taken": 100,
+  "elapsed_seconds": 14.4,
+  "action_effects": {
+    "1": {
+      "109 pixels changed": 1,
+      "Controllable moved UP by 3 cells": 1,
+      "Controllable moved DOWN-RIGHT by 18 cells": 1
+    },
+    "2": {
+      "Controllable moved DOWN by 0 cells": 2
+    },
+    "3": {
+      "Controllable moved DOWN by 0 cells": 2
+    },
+    "4": {
+      "Controllable moved DOWN by 0 cells": 2
+    },
+    "5": {
+      "Controllable moved DOWN by 0 cells": 2
+    },
+    "6": {
+      "No movement (wall?)": 2
+    },
+    "7": {
+      "No movement (wall?)": 2
+    }
+  },
+  "c1_expansion_names": []
+}

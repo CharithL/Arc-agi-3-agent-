@@ -24,7 +24,10 @@ class LLMClient:
                 import anthropic
                 self._client = anthropic.Anthropic(api_key=api_key)
                 self._backend = "anthropic"
-                self._model = "claude-sonnet-4-20250514" if model == "auto" else model
+                if model == "auto" or model == "haiku":
+                    self._model = "claude-haiku-4-5-20251001"
+                else:
+                    self._model = model
                 print(f"[LLM] Using Anthropic API ({self._model})")
                 return
             except Exception as e:
