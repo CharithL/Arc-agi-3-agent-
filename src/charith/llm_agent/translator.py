@@ -65,6 +65,9 @@ def _position_name(centroid: Tuple[float, float], grid_dims: Tuple[int, int]) ->
 class PerceptTranslator:
     """Convert a StructuredPercept into a compact natural-language description."""
 
+    def __init__(self):
+        self._prev_goal_distance: Optional[float] = None
+
     def translate(
         self,
         percept: StructuredPercept,
@@ -85,6 +88,9 @@ class PerceptTranslator:
             changes = self._describe_changes(prev_percept, percept, controllable_ids)
             if changes:
                 parts.append(changes)
+
+        # PROGRESS: distance to nearest goal candidate vs last tick
+        parts.append(self._describe_progress(percept, controllable_ids))
 
         if available_actions:
             parts.append(f"Available actions: {available_actions}")
@@ -241,6 +247,69 @@ class PerceptTranslator:
                 )
 
         return "\n".join(lines)
+
+    def _describe_progress(
+        self,
+        percept: StructuredPercept,
+        controllable_ids: Set[int],
+    ) -> str:
+        """Report distance to nearest goal and whether it changed.
+
+        Gives the LLM a reward signal:
+        - GETTING CLOSER = keep doing what you're doing
+        - GETTING FARTHER = wrong direction, change action
+        - STUCK = hitting a wall, try different approach
+        """
+        ctrl_objs = [o for o in percept.objects if o.object_id in controllable_ids]
+        if not ctrl_objs:
+            self._prev_goal_distance = None
+            return "PROGRESS: No controllable object detected yet"
+
+        ctrl = ctrl_objs[0]
+
+        # Find goal candidates (same logic as _describe_goal_candidates)
+        color_counts: Dict[int, int] = {}
+        for o in percept.objects:
+            color_counts[o.color] = color_counts.get(o.color, 0) + 1
+        bg = percept.background_color
+
+        candidates = [
+            o for o in percept.objects
+            if o.object_id not in controllable_ids
+            and (color_counts.get(o.color, 0) == 1 or o.size <= 5
+                 or (o.color != bg and o.color != ctrl.color))
+        ]
+
+        if not candidates:
+            self._prev_goal_distance = None
+            return "PROGRESS: No goal candidates detected"
+
+        # Find nearest candidate
+        nearest = min(candidates, key=lambda o: (
+            (o.centroid[0] - ctrl.centroid[0])**2 +
+            (o.centroid[1] - ctrl.centroid[1])**2
+        ))
+        dist = ((nearest.centroid[0] - ctrl.centroid[0])**2 +
+                (nearest.centroid[1] - ctrl.centroid[1])**2)**0.5
+
+        prev = self._prev_goal_distance
+        self._prev_goal_distance = dist
+
+        cn = _color_name(nearest.color)
+
+        if prev is None:
+            return f"PROGRESS: Controllable is {dist:.0f} cells from nearest goal ({cn} object)"
+
+        delta = dist - prev
+        if abs(delta) < 0.5:
+            return (f"PROGRESS: Controllable is {dist:.0f} cells from nearest goal "
+                    f"(was {prev:.0f} -- STUCK, try different action)")
+        elif delta < 0:
+            return (f"PROGRESS: Controllable is {dist:.0f} cells from nearest goal "
+                    f"(was {prev:.0f} -- GETTING CLOSER, keep going!)")
+        else:
+            return (f"PROGRESS: Controllable is {dist:.0f} cells from nearest goal "
+                    f"(was {prev:.0f} -- GETTING FARTHER, wrong direction!)")
 
     def _describe_relations(
         self,

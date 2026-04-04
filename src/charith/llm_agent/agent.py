@@ -279,7 +279,10 @@ class LLMAgent:
             last_conf = (h.confidence if hasattr(h, 'confidence') else h.get('confidence', '?')) if h else '?'
             effects = self.context.get_discovered_effects()
             n_c1 = len(self.c1c2.c1_expansions)
-            effects = "; ".join(f"A{k}:{v[:30]}" for k, v in self.context.action_effect_map.items())
+            effects = "; ".join(
+                f"A{k}:{list(v.keys())[0][:25]}({list(v.values())[0]}x)" if v else f"A{k}:?"
+                for k, v in self.context.action_effect_map.items()
+            )
             print(f"  [Tick {step+1:2d}] ACTION={action} | hyp: {last_hyp[:60]} ({last_conf}) | C1+={n_c1} | effects: {effects[:80]}")
 
             # Map action int to GameAction
