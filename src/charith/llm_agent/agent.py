@@ -54,6 +54,7 @@ Each hypothesis has a confidence level (low/med/high). Update these as you gathe
 
 You MUST respond in exactly this format:
 
+PLAN: <"My hypothesis says [X]. To achieve [X], I need action [Y] because [reason].">
 ACTION: <integer from available actions>
 HYPOTHESIS: <your current best hypothesis about what to do and why>
 CONFIDENCE: <low|med|high>
@@ -73,6 +74,22 @@ HYPOTHESIS: Need to collect keys before reaching the door
 CONFIDENCE: low
 C1_EXPANSION: KEY_LOCK: Some objects act as keys that unlock barriers when touched
 REASONING: After touching the yellow object, a wall disappeared. This suggests a key-lock mechanic.
+
+## CRITICAL RULE: Your ACTION must directly follow from your HYPOTHESIS.
+
+If your hypothesis says "move toward the goal on the left" and you know ACTION 3 moves left,
+you MUST choose ACTION=3. Do NOT cycle through all actions.
+Do NOT explore actions you already understand.
+
+Before choosing an action, think:
+"My hypothesis says [X]. To achieve [X], I need action [Y] because [reason]."
+Then set ACTION=[Y].
+
+If you are stuck (same hypothesis for 5+ ticks with no progress),
+CHANGE your hypothesis, not your action pattern.
+
+If you see GOAL CANDIDATES in the observation with directional distance,
+choose the action that moves you TOWARD the nearest goal candidate.
 """
 
 

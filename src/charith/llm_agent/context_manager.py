@@ -32,7 +32,7 @@ class ContextManager:
         self.max_tokens = max_tokens
         self.full_history: List[TickRecord] = []
         self.important_ticks: List[int] = []
-        self.action_effect_map: Dict[int, List[str]] = {}  # action_int -> list of ALL observed effects
+        self.action_effect_map: Dict[int, Dict[str, int]] = {}  # action_int -> {effect_text: count}
 
     def add_tick(
         self,
@@ -99,58 +99,70 @@ class ContextManager:
         return "\n".join(lines)
 
     def get_discovered_effects(self) -> str:
-        """Format known action effects for the prompt.
+        """Format known action effects with counts.
 
-        Shows the MOST SIGNIFICANT effect first, then notes if the action
-        is context-dependent (different effects observed at different times).
+        Output like: A2: moves RIGHT (seen 3x), no movement (seen 8x)
+        This tells the LLM frequency — USUALLY doesn't work but SOMETIMES
+        moves right = context-dependent mechanic.
         """
         if not self.action_effect_map:
             return "Known action effects: none discovered yet"
         lines = ["Known action effects:"]
-        for action, effects in sorted(self.action_effect_map.items()):
-            # Deduplicate and find unique effect types
-            unique = list(dict.fromkeys(effects))  # preserves order, removes dupes
-            # Sort by significance: real movement first
-            significant = [e for e in unique if 'moved' in e.lower() and 'by 0' not in e.lower()]
-            minor = [e for e in unique if e not in significant]
+        for action, counter in sorted(self.action_effect_map.items()):
+            # Sort by significance (real movement first), then by count
+            def _sig(text: str) -> int:
+                t = text.lower()
+                if 'moved' in t and 'by 0' not in t:
+                    return 2
+                if 'pixel' in t or 'changed' in t:
+                    return 1
+                return 0
 
-            if significant:
-                primary = significant[0]
-                if minor:
-                    lines.append(f"  ACTION {action}: {primary} (sometimes: {minor[0][:40]})")
-                else:
-                    lines.append(f"  ACTION {action}: {primary}")
-            elif unique:
-                lines.append(f"  ACTION {action}: {unique[0]}")
+            entries = sorted(counter.items(), key=lambda kv: (-_sig(kv[0]), -kv[1]))
+            parts = [f"{effect} (seen {count}x)" for effect, count in entries]
+            lines.append(f"  ACTION {action}: {', '.join(parts)}")
 
         return "\n".join(lines)
 
     def record_action_effect(self, action: int, effect: str) -> None:
-        """Store an observed action effect. Keeps ALL effects per action
-        to detect context-dependent mechanics."""
+        """Store an observed action effect as a counted, deduplicated map.
+
+        self.action_effect_map[action] is a Dict[str, int] counting
+        how many times each unique effect was observed. Capped at 3
+        unique effects per action.
+        """
         if not effect:
             return
 
         if action not in self.action_effect_map:
-            self.action_effect_map[action] = []
+            self.action_effect_map[action] = {}
 
-        # Cap at 10 effects per action to avoid unbounded growth
-        effects = self.action_effect_map[action]
-        if len(effects) >= 10:
-            # Remove the least significant one
-            def _sig(t: str) -> int:
-                tl = t.lower()
-                if 'no movement' in tl or 'wall' in tl or 'by 0' in tl:
-                    return 0
-                if 'moved' in tl:
+        counter = self.action_effect_map[action]
+
+        # Normalize effect text for deduplication
+        key = effect.strip()
+
+        if key in counter:
+            counter[key] += 1
+            return
+
+        # Cap at 3 unique effects per action
+        if len(counter) >= 3:
+            # Drop the least significant entry
+            def _sig(text: str) -> int:
+                t = text.lower()
+                if 'moved' in t and 'by 0' not in t:
                     return 2
-                if 'pixel' in tl or 'changed' in tl:
+                if 'pixel' in t or 'changed' in t:
                     return 1
                 return 0
-            effects.sort(key=_sig, reverse=True)
-            effects.pop()  # Remove lowest significance
+            worst = min(counter.keys(), key=lambda k: (_sig(k), counter[k]))
+            if _sig(key) > _sig(worst) or (counter[worst] == 1 and _sig(key) >= _sig(worst)):
+                del counter[worst]
+            else:
+                return  # New effect is less significant, don't add
 
-        effects.append(effect)
+        counter[key] = 1
 
     def reset(self) -> None:
         """Clear all history for a new game."""
