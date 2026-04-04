@@ -90,6 +90,13 @@ CHANGE your hypothesis, not your action pattern.
 
 If you see GOAL CANDIDATES in the observation with directional distance,
 choose the action that moves you TOWARD the nearest goal candidate.
+
+EFFICIENCY RULE: If you have tested an action 3+ times and it ALWAYS
+shows "No movement" or "wall", STOP USING THAT ACTION. It is wasted.
+Only use actions that have produced movement at least once.
+
+If only ONE action produces movement, USE THAT ACTION REPEATEDLY
+until it stops working or you reach your goal.
 """
 
 
