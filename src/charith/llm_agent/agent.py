@@ -190,31 +190,52 @@ class LLMAgent:
                     obj.object_id, obj.centroid
                 )
 
-        # 6. Translate to natural language
+        # 6. Describe effect of last action (before filtering)
+        if self._prev_percept is not None:
+            effect = self._describe_action_effect(self._prev_percept, percept, self._last_action)
+            self.context.record_action_effect(self._last_action, effect)
+
+        # 7. Filter available actions — remove dead actions after exploration
+        n_explore = len(self._available_actions) * 2
+        if self._tick > n_explore:
+            working_actions = []
+            for a in self._available_actions:
+                effects = self.context.action_effect_map.get(a, {})
+                # Keep if ANY effect isn't "No movement"/"wall"
+                has_real_effect = any(
+                    'no movement' not in e.lower() and 'wall' not in e.lower()
+                    for e in effects.keys()
+                )
+                # Keep if never tested
+                never_tested = len(effects) == 0
+                if has_real_effect or never_tested:
+                    working_actions.append(a)
+            # Fallback: keep all if everything filtered out
+            if not working_actions:
+                working_actions = list(self._available_actions)
+            filtered_actions = working_actions
+        else:
+            filtered_actions = list(self._available_actions)
+
+        # 8. Translate — LLM only sees working actions
         observation_text = self.translator.translate(
             percept,
             prev_percept=self._prev_percept,
             controllable_ids=self._controllable_ids,
             tick=self._tick,
-            available_actions=self._available_actions,
+            available_actions=filtered_actions,
         )
 
-        # 7. Describe effect of last action
-        if self._prev_percept is not None:
-            effect = self._describe_action_effect(self._prev_percept, percept, self._last_action)
-            self.context.record_action_effect(self._last_action, effect)
-
-        # 8. Build prompt and query LLM
+        # 9. Build prompt and query LLM
         user_prompt = self._build_prompt(observation_text)
         response_text = self.llm.query(SYSTEM_PROMPT, user_prompt)
 
-        # 9. Parse LLM response
-        parsed = self.parser.parse(response_text, self._available_actions)
+        # 10. Parse LLM response — constrained to working actions only
+        parsed = self.parser.parse(response_text, filtered_actions)
 
-        # Force exploration: cycle through actions in first N ticks
-        n_explore = len(self._available_actions) * 2  # Try each action twice
-        if self._tick < n_explore:
-            forced_action = self._available_actions[self._tick % len(self._available_actions)]
+        # Force exploration: cycle through ALL actions in first N ticks
+        if self._tick <= n_explore:
+            forced_action = self._available_actions[(self._tick - 1) % len(self._available_actions)]
             parsed['action'] = forced_action
             parsed['reasoning'] = f"[FORCED EXPLORE tick {self._tick}] " + parsed.get('reasoning', '')
 
