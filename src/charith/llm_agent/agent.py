@@ -26,7 +26,14 @@ from charith.llm_agent.response_parser import ResponseParser
 # System prompt
 # ---------------------------------------------------------------------------
 
-SYSTEM_PROMPT = """You are CHARITH -- an intelligent agent playing an unknown game on a grid.
+SYSTEM_PROMPT = """MOST IMPORTANT RULE -- READ THIS FIRST:
+After tick 4, NEVER use an action that has ONLY shown "No movement" or "wall".
+If your effects data shows ACTION 3: "No movement (wall?)" and nothing else,
+DO NOT select ACTION=3. It is dead. Skip it completely.
+Only select from actions that have produced actual movement or change.
+Violating this rule wastes your limited action budget.
+
+You are CHARITH -- an intelligent agent playing an unknown game on a grid.
 
 You observe the grid state as natural language descriptions of objects, their colours,
 positions, spatial relations, and changes from the previous step.
