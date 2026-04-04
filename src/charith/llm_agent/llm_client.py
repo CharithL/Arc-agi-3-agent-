@@ -50,14 +50,21 @@ class LLMClient:
     def backend(self) -> str:
         return self._backend
 
+    @property
+    def available(self) -> bool:
+        return self._backend != "mock"
+
     def query(self, system_prompt: str, user_prompt: str) -> str:
         self._call_count += 1
 
-        if self._backend == "anthropic":
-            return self._query_anthropic(system_prompt, user_prompt)
-        elif self._backend == "ollama":
-            return self._query_ollama(system_prompt, user_prompt)
-        else:
+        try:
+            if self._backend == "anthropic":
+                return self._query_anthropic(system_prompt, user_prompt)
+            elif self._backend == "ollama":
+                return self._query_ollama(system_prompt, user_prompt)
+            else:
+                return self._mock_response()
+        except Exception:
             return self._mock_response()
 
     def _query_anthropic(self, system_prompt: str, user_prompt: str) -> str:

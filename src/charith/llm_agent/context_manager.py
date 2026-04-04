@@ -108,7 +108,32 @@ class ContextManager:
         return "\n".join(lines)
 
     def record_action_effect(self, action: int, effect: str) -> None:
-        """Store a discovered action->effect mapping."""
+        """Store a discovered action->effect mapping.
+
+        Only overwrite if the new effect is MORE significant than the
+        stored one. 'No movement' and 'wall' are low-significance.
+        Actual movement descriptions are high-significance.
+        """
+        if not effect:
+            return
+
+        # Score significance: actual movement > pixel changes > no movement
+        def _significance(text: str) -> int:
+            t = text.lower()
+            if 'no movement' in t or 'wall' in t or '0 c' in t or '0 pixels' in t:
+                return 0
+            if 'moved' in t and ('by 0' not in t):
+                return 2  # Real movement
+            if 'pixel' in t or 'changed' in t:
+                return 1  # Something changed
+            return 0
+
+        new_sig = _significance(effect)
+        if action in self.action_effect_map:
+            old_sig = _significance(self.action_effect_map[action])
+            if new_sig <= old_sig:
+                return  # Keep the more significant effect
+
         self.action_effect_map[action] = effect
 
     def reset(self) -> None:

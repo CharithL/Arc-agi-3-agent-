@@ -127,6 +127,11 @@ class PerceptTranslator:
 
         ordered = ctrl + singletons + others
 
+        # Detect special objects for goal/template/progress hints
+        # Template box: small enclosed area with a pattern (small bbox, contains multiple colors)
+        # Progress bar: long thin object at edges (width >> height or vice versa, at bottom/right)
+        grid_h, grid_w = percept.grid_dims
+
         # Cap at 8 objects to stay concise
         for obj in ordered[:8]:
             pos = _position_name(obj.centroid, percept.grid_dims)
@@ -136,7 +141,18 @@ class PerceptTranslator:
             if obj.object_id in controllable_ids:
                 tags.append("CONTROLLABLE")
             if color_counts.get(obj.color, 0) == 1:
-                tags.append("UNIQUE COLOR")
+                tags.append("UNIQUE COLOR - POSSIBLE GOAL")
+            # Detect template boxes (small objects near top with distinct inner pattern)
+            if (obj.size < 100 and obj.centroid[0] < grid_h * 0.25
+                    and obj.object_id not in controllable_ids
+                    and obj.width > 3 and obj.height > 3):
+                tags.append("POSSIBLE TEMPLATE/REFERENCE")
+            # Detect progress indicators (very wide/tall thin bars at edges)
+            if ((obj.width > grid_w * 0.4 and obj.height <= 4) or
+                    (obj.height > grid_h * 0.4 and obj.width <= 4)):
+                if (obj.centroid[0] > grid_h * 0.85 or obj.centroid[1] > grid_w * 0.85
+                        or obj.centroid[0] < grid_h * 0.15):
+                    tags.append("POSSIBLE PROGRESS/SCORE BAR")
             tag_str = f" [{', '.join(tags)}]" if tags else ""
             lines.append(f"  - {cn} {sc} object at {pos} (size={obj.size}){tag_str}")
 
@@ -182,6 +198,36 @@ class PerceptTranslator:
             a = obj_map.get(r.obj_a_id, f"obj-{r.obj_a_id}")
             b = obj_map.get(r.obj_b_id, f"obj-{r.obj_b_id}")
             lines.append(f"  - {a} is {r.relation.upper()} of {b} (distance={r.distance:.0f})")
+
+        # Add explicit controllable-to-goal-candidate distances
+        color_counts: Dict[int, int] = {}
+        for o in percept.objects:
+            color_counts[o.color] = color_counts.get(o.color, 0) + 1
+
+        ctrl_objs = [o for o in percept.objects if o.object_id in controllable_ids]
+        goal_candidates = [o for o in percept.objects
+                          if o.object_id not in controllable_ids
+                          and (color_counts.get(o.color, 0) == 1 or o.size <= 10)]
+
+        if ctrl_objs and goal_candidates:
+            ctrl = ctrl_objs[0]
+            for gc in goal_candidates[:3]:
+                dr = gc.centroid[0] - ctrl.centroid[0]
+                dc = gc.centroid[1] - ctrl.centroid[1]
+                dist = (dr**2 + dc**2)**0.5
+                direction = ""
+                if abs(dr) > 1:
+                    direction += "DOWN " if dr > 0 else "UP "
+                if abs(dc) > 1:
+                    direction += "RIGHT" if dc > 0 else "LEFT"
+                direction = direction.strip() or "SAME POSITION"
+                cn = _color_name(gc.color)
+                tag = "UNIQUE" if color_counts.get(gc.color, 0) == 1 else "small"
+                lines.append(
+                    f"  >>> Controllable -> {tag} {cn} object: "
+                    f"distance={dist:.0f}, direction={direction} "
+                    f"(need to go {direction} to reach it)"
+                )
 
         return "Relations:\n" + "\n".join(lines)
 
