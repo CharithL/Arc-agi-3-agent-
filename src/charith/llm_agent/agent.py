@@ -242,6 +242,8 @@ class LLMAgent:
         frame = env.reset()
 
         print(f"[LLMAgent] Playing game: {game_id} (max {max_actions} actions)")
+        self._levels_completed = 0
+        self._available_actions = getattr(frame, 'available_actions', [1, 2, 3, 4])
 
         for step in range(max_actions):
             grid = self._parse_observation(frame)
@@ -249,21 +251,34 @@ class LLMAgent:
 
             # Map action int to GameAction
             action_map = {
-                1: GameAction.UP,
-                2: GameAction.RIGHT,
-                3: GameAction.DOWN,
-                4: GameAction.LEFT,
+                1: GameAction.ACTION1,
+                2: GameAction.ACTION2,
+                3: GameAction.ACTION3,
+                4: GameAction.ACTION4,
+                5: GameAction.ACTION5,
+                6: GameAction.ACTION6,
+                7: GameAction.ACTION7,
             }
-            game_action = action_map.get(action, GameAction.UP)
+            game_action = action_map.get(action, GameAction.ACTION1)
             frame = env.step(game_action)
 
-            if hasattr(frame, 'done') and frame.done:
-                print(f"[LLMAgent] Game ended at step {step + 1}")
+            # Check for game over
+            state_str = str(getattr(frame, 'state', ''))
+            if 'NOT_FINISHED' not in state_str and state_str:
+                print(f"[LLMAgent] Game ended at step {step + 1}: {state_str}")
                 break
+            if hasattr(frame, 'levels_completed') and frame.levels_completed > self._levels_completed:
+                self._levels_completed = frame.levels_completed
+                print(f"[LLMAgent] Level {self._levels_completed} complete!")
 
-        scorecard = env.scorecard()
-        print(f"[LLMAgent] Scorecard: {scorecard}")
-        return scorecard
+        scorecard = arcade.get_scorecard()
+        print(f"[LLMAgent] Done. Levels: {self._levels_completed}")
+        return {
+            'game_id': game_id,
+            'levels_completed': self._levels_completed,
+            'actions_taken': step + 1,
+            'scorecard': str(scorecard)[:200],
+        }
 
     # ---- internal ----------------------------------------------------------
 

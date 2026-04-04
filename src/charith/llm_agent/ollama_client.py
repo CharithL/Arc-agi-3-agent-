@@ -22,11 +22,13 @@ class OllamaClient:
         self._available = self._check_ollama()
 
     def _check_ollama(self) -> bool:
-        """Check if the ollama Python package is importable."""
+        """Check if the ollama Python package is importable and server reachable."""
         try:
-            import ollama  # noqa: F401
+            from ollama import Client
+            client = Client(host='http://localhost:11434')
+            client.list()  # Quick ping to verify server is running
             return True
-        except ImportError:
+        except Exception:
             return False
 
     @property
@@ -41,8 +43,9 @@ class OllamaClient:
         if not self._available:
             return self._mock_response()
 
-        import ollama
-        response = ollama.chat(
+        from ollama import Client
+        client = Client(host='http://localhost:11434')
+        response = client.chat(
             model=self.model,
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -53,7 +56,9 @@ class OllamaClient:
                 "num_predict": self.max_tokens,
             },
         )
-        return response["message"]["content"]
+        # Strip non-ASCII chars that break Windows console encoding
+        text = response["message"]["content"]
+        return text.encode('ascii', errors='replace').decode('ascii')
 
     def _mock_response(self) -> str:
         """Deterministic mock for testing without Ollama."""
