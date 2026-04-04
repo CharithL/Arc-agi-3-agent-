@@ -66,21 +66,25 @@ def meta_train(config: MetaTrainingConfig = None,
     if config is None:
         config = MetaTrainingConfig()
 
+    # Device detection — use GPU if available
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"Device: {device}" + (f" ({torch.cuda.get_device_name(0)})" if device.type == 'cuda' else ""))
+
     # Initialize
     model = MetaLearner(
         d_model=config.d_model, n_heads=config.n_heads,
         n_layers=config.n_layers, n_actions=config.n_actions,
         max_context=config.max_context,
-    )
+    ).to(device)
     if checkpoint_path and Path(checkpoint_path).exists():
-        model.load_state_dict(torch.load(checkpoint_path, map_location='cpu', weights_only=True))
+        model.load_state_dict(torch.load(checkpoint_path, map_location=device, weights_only=True))
         print(f"Resumed from {checkpoint_path}")
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.lr, weight_decay=0.01)
     game_gen = GameGenerator()
     perception = CoreKnowledgePerception()
-    percept_tok = PerceptTokenizer(d_model=config.d_model)
-    action_tok = ActionTokenizer(n_actions=config.n_actions, d_model=config.d_model)
+    percept_tok = PerceptTokenizer(d_model=config.d_model).to(device)
+    action_tok = ActionTokenizer(n_actions=config.n_actions, d_model=config.d_model).to(device)
     context = ContextManager(d_model=config.d_model, max_length=config.max_context)
 
     param_count = sum(p.numel() for p in model.parameters())
@@ -138,9 +142,9 @@ def meta_train(config: MetaTrainingConfig = None,
             for i in range(n_tokens):
                 types[i] = i % 2  # 0, 1, 0, 1, ...
 
-            # Forward pass
-            tokens_batch = seq.unsqueeze(0)  # [1, seq_len, d_model]
-            types_batch = types.unsqueeze(0)  # [1, seq_len]
+            # Forward pass — move to device
+            tokens_batch = seq.unsqueeze(0).to(device)  # [1, seq_len, d_model]
+            types_batch = types.unsqueeze(0).to(device)  # [1, seq_len]
 
             action, log_prob, value = model.get_action(
                 tokens_batch, types_batch,
@@ -152,7 +156,7 @@ def meta_train(config: MetaTrainingConfig = None,
                 action_logits, predictions, _ = model(tokens_batch, types_batch)
                 # The prediction at position -2 (last action token) should predict current percept
                 predicted_percept = predictions[0, -2, :]  # prediction after last action
-                actual_percept = p_token.detach()
+                actual_percept = p_token.detach().to(device)
                 pred_loss = F.mse_loss(predicted_percept, actual_percept)
                 pred_losses.append(pred_loss)
 
@@ -189,22 +193,22 @@ def meta_train(config: MetaTrainingConfig = None,
             for r in reversed(rewards):
                 G = r + config.gamma * G
                 returns.insert(0, G)
-            returns = torch.tensor(returns, dtype=torch.float32)
+            returns = torch.tensor(returns, dtype=torch.float32, device=device)
             if len(returns) > 1:
                 returns = (returns - returns.mean()) / (returns.std() + 1e-8)
 
             # Policy loss (REINFORCE with baseline)
-            policy_loss = 0.0
-            value_loss = 0.0
+            policy_loss = torch.tensor(0.0, device=device)
+            value_loss = torch.tensor(0.0, device=device)
             for lp, val, G in zip(log_probs, values, returns):
                 advantage = G - val.detach()
-                policy_loss -= lp * advantage
-                value_loss += F.mse_loss(val, G)
+                policy_loss = policy_loss - lp * advantage
+                value_loss = value_loss + F.mse_loss(val, G)
             policy_loss = policy_loss / len(log_probs)
             value_loss = value_loss / len(values)
 
             # Prediction loss
-            mean_pred = torch.stack(pred_losses).mean() if pred_losses else torch.tensor(0.0)
+            mean_pred = torch.stack(pred_losses).mean() if pred_losses else torch.tensor(0.0, device=device)
 
             # Total loss
             total_loss = (config.pred_loss_weight * mean_pred +
