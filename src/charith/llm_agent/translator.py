@@ -78,6 +78,7 @@ class PerceptTranslator:
 
         parts.append(self._grid_overview(percept, tick))
         parts.append(self._describe_objects(percept, controllable_ids))
+        parts.append(self._describe_goal_candidates(percept, controllable_ids))
         parts.append(self._describe_relations(percept, controllable_ids))
 
         if prev_percept is not None:
@@ -160,6 +161,86 @@ class PerceptTranslator:
             lines.append(f"  ... and {len(percept.objects) - 8} more objects")
 
         return "Objects:\n" + "\n".join(lines)
+
+    def _describe_goal_candidates(
+        self,
+        percept: StructuredPercept,
+        controllable_ids: Set[int],
+    ) -> str:
+        """Dedicated section calling out candidate goals with directional distance.
+
+        A candidate goal is any object that is:
+        (a) unique color (only 1 object of that color), or
+        (b) very small (<=5 cells), or
+        (c) different color from both background AND controllable
+        """
+        color_counts: Dict[int, int] = {}
+        for o in percept.objects:
+            color_counts[o.color] = color_counts.get(o.color, 0) + 1
+
+        ctrl_objs = [o for o in percept.objects if o.object_id in controllable_ids]
+        ctrl_color = ctrl_objs[0].color if ctrl_objs else -1
+        bg_color = percept.background_color
+
+        candidates = []
+        for o in percept.objects:
+            if o.object_id in controllable_ids:
+                continue
+            is_unique = color_counts.get(o.color, 0) == 1
+            is_tiny = o.size <= 5
+            is_distinct = o.color != bg_color and o.color != ctrl_color
+            if is_unique or is_tiny or is_distinct:
+                reasons = []
+                if is_unique:
+                    reasons.append("UNIQUE COLOR")
+                if is_tiny:
+                    reasons.append("VERY SMALL")
+                if is_distinct and not is_unique:
+                    reasons.append("DISTINCT COLOR")
+                candidates.append((o, reasons))
+
+        if not candidates or not ctrl_objs:
+            return "Goal candidates: none detected yet"
+
+        ctrl = ctrl_objs[0]
+        grid_h, grid_w = percept.grid_dims
+        lines = ["GOAL CANDIDATES (objects that might be targets):"]
+
+        for o, reasons in candidates[:5]:
+            cn = _color_name(o.color)
+            pos = _position_name(o.centroid, percept.grid_dims)
+            dr = o.centroid[0] - ctrl.centroid[0]
+            dc = o.centroid[1] - ctrl.centroid[1]
+            dist = (dr**2 + dc**2)**0.5
+
+            direction_parts = []
+            if dr < -2:
+                direction_parts.append(f"UP by {abs(dr):.0f}")
+            elif dr > 2:
+                direction_parts.append(f"DOWN by {dr:.0f}")
+            if dc < -2:
+                direction_parts.append(f"LEFT by {abs(dc):.0f}")
+            elif dc > 2:
+                direction_parts.append(f"RIGHT by {dc:.0f}")
+            direction = " and ".join(direction_parts) if direction_parts else "SAME POSITION"
+
+            reason_str = ", ".join(reasons)
+            lines.append(
+                f"  >>> {cn} object at {pos} (size={o.size}) [{reason_str}]"
+            )
+            lines.append(
+                f"      Controllable is {dist:.0f} cells away. "
+                f"To reach it: go {direction}"
+            )
+
+            # Detect template boxes (small enclosed regions near edges)
+            if (o.width > 3 and o.height > 3 and o.size < 100
+                    and o.centroid[0] < grid_h * 0.25):
+                lines.append(
+                    f"      NOTE: This looks like a TEMPLATE/REFERENCE pattern"
+                )
+
+        return "\n".join(lines)
 
     def _describe_relations(
         self,

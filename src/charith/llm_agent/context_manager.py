@@ -32,7 +32,7 @@ class ContextManager:
         self.max_tokens = max_tokens
         self.full_history: List[TickRecord] = []
         self.important_ticks: List[int] = []
-        self.action_effect_map: Dict[int, str] = {}  # action_int -> effect description
+        self.action_effect_map: Dict[int, List[str]] = {}  # action_int -> list of ALL observed effects
 
     def add_tick(
         self,
@@ -99,42 +99,58 @@ class ContextManager:
         return "\n".join(lines)
 
     def get_discovered_effects(self) -> str:
-        """Format known action effects for the prompt."""
+        """Format known action effects for the prompt.
+
+        Shows the MOST SIGNIFICANT effect first, then notes if the action
+        is context-dependent (different effects observed at different times).
+        """
         if not self.action_effect_map:
             return "Known action effects: none discovered yet"
         lines = ["Known action effects:"]
-        for action, effect in sorted(self.action_effect_map.items()):
-            lines.append(f"  ACTION {action}: {effect}")
+        for action, effects in sorted(self.action_effect_map.items()):
+            # Deduplicate and find unique effect types
+            unique = list(dict.fromkeys(effects))  # preserves order, removes dupes
+            # Sort by significance: real movement first
+            significant = [e for e in unique if 'moved' in e.lower() and 'by 0' not in e.lower()]
+            minor = [e for e in unique if e not in significant]
+
+            if significant:
+                primary = significant[0]
+                if minor:
+                    lines.append(f"  ACTION {action}: {primary} (sometimes: {minor[0][:40]})")
+                else:
+                    lines.append(f"  ACTION {action}: {primary}")
+            elif unique:
+                lines.append(f"  ACTION {action}: {unique[0]}")
+
         return "\n".join(lines)
 
     def record_action_effect(self, action: int, effect: str) -> None:
-        """Store a discovered action->effect mapping.
-
-        Only overwrite if the new effect is MORE significant than the
-        stored one. 'No movement' and 'wall' are low-significance.
-        Actual movement descriptions are high-significance.
-        """
+        """Store an observed action effect. Keeps ALL effects per action
+        to detect context-dependent mechanics."""
         if not effect:
             return
 
-        # Score significance: actual movement > pixel changes > no movement
-        def _significance(text: str) -> int:
-            t = text.lower()
-            if 'no movement' in t or 'wall' in t or '0 c' in t or '0 pixels' in t:
+        if action not in self.action_effect_map:
+            self.action_effect_map[action] = []
+
+        # Cap at 10 effects per action to avoid unbounded growth
+        effects = self.action_effect_map[action]
+        if len(effects) >= 10:
+            # Remove the least significant one
+            def _sig(t: str) -> int:
+                tl = t.lower()
+                if 'no movement' in tl or 'wall' in tl or 'by 0' in tl:
+                    return 0
+                if 'moved' in tl:
+                    return 2
+                if 'pixel' in tl or 'changed' in tl:
+                    return 1
                 return 0
-            if 'moved' in t and ('by 0' not in t):
-                return 2  # Real movement
-            if 'pixel' in t or 'changed' in t:
-                return 1  # Something changed
-            return 0
+            effects.sort(key=_sig, reverse=True)
+            effects.pop()  # Remove lowest significance
 
-        new_sig = _significance(effect)
-        if action in self.action_effect_map:
-            old_sig = _significance(self.action_effect_map[action])
-            if new_sig <= old_sig:
-                return  # Keep the more significant effect
-
-        self.action_effect_map[action] = effect
+        effects.append(effect)
 
     def reset(self) -> None:
         """Clear all history for a new game."""
