@@ -145,4 +145,6 @@ class ArcTableModel:
         return active
 
     def _hash_context(self, context: dict) -> int:
-        return hash(frozenset(context.items()))
+        """Hash a context dict. Values are stringified for hash-safety —
+        consistent with how `changes` values are handled in `record()`."""
+        return hash(frozenset((k, str(v)) for k, v in context.items()))

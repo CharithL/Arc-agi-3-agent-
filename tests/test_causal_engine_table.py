@@ -51,3 +51,49 @@ def test_sequence_prediction_when_enabled():
     pred = t.predict(action=2, target="effect_fired", prev_action=1)
     assert pred[0] is True
     assert pred[2] == "sequence"
+
+
+def test_context_prediction_when_enabled():
+    """Mirror of the sequence test: context branch requires >=2 obs,
+    uses context hash for key, and returns source='context'."""
+    t = ArcTableModel(num_actions=8)
+    t.enable_expansion("context", "test")
+
+    # Record same action in two different contexts:
+    # context A: action 3 -> target changes
+    # context B: action 3 -> nothing changes
+    ctx_a = {"mode": "active"}
+    ctx_b = {"mode": "idle"}
+
+    t.record(action=3, changes={"target_changed"}, context=ctx_a)
+    t.record(action=3, changes={"target_changed"}, context=ctx_a)
+    t.record(action=3, changes=set(), context=ctx_b)
+    t.record(action=3, changes=set(), context=ctx_b)
+
+    # Predict with context A: should see target_changed (source=context)
+    pred_a = t.predict(action=3, target="target_changed", context=ctx_a)
+    assert pred_a[0] is True
+    assert pred_a[2] == "context"
+
+    # Predict with context B: should NOT predict target_changed
+    pred_b = t.predict(action=3, target="target_changed", context=ctx_b)
+    assert pred_b[0] is False
+    assert pred_b[2] == "context"
+
+
+def test_context_hash_survives_unhashable_values():
+    """Fix #1: context values like lists/arrays must not crash _hash_context.
+    Regression test for the footgun caught in Task 2 review."""
+    t = ArcTableModel(num_actions=8)
+    t.enable_expansion("context", "test")
+
+    # Context with a list value (would crash with hash(frozenset(items())))
+    ctx_with_list = {"neighbors": [1, 2, 3], "color": 5}
+
+    # Should not raise TypeError
+    t.record(action=1, changes={"effect"}, context=ctx_with_list)
+    t.record(action=1, changes={"effect"}, context=ctx_with_list)
+
+    pred = t.predict(action=1, target="effect", context=ctx_with_list)
+    assert pred[0] is True
+    assert pred[2] == "context"
