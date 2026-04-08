@@ -80,7 +80,8 @@ class ArcErrorAnalyzer:
             try:
                 kr = stats.kruskal(*valid_prev)
                 p = float(kr.pvalue)
-                # scipy returns NaN when all values across all groups are identical
+                # Belt-and-suspenders: older scipy returned NaN for all-identical
+                # data; modern scipy raises ValueError (caught by the except below).
                 if np.isnan(p):
                     p = 1.0
                 result["kruskal_p"] = p
@@ -102,6 +103,8 @@ class ArcErrorAnalyzer:
             try:
                 kr_a = stats.kruskal(*valid_act)
                 p = float(kr_a.pvalue)
+                # Belt-and-suspenders: older scipy returned NaN for all-identical
+                # data; modern scipy raises ValueError (caught by the except below).
                 if np.isnan(p):
                     p = 1.0
                 result["kruskal_cell_p"] = p
