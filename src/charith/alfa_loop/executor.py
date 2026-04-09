@@ -25,6 +25,20 @@ from charith.full_stack.percept_diff import diff_to_actual_observation
 _LEVEL_TRANSITION_CHANGE_FRACTION = 0.5
 
 
+def _has_valid_grid(obs) -> bool:
+    """
+    True when `obs` has a non-empty .frame list whose first element is a
+    usable grid (not None). Guards every Executor loop iteration against
+    the real arc_agi SDK quirk of returning frame=[] mid-episode.
+    """
+    if obs is None:
+        return False
+    frame_list = getattr(obs, "frame", None)
+    if not frame_list:
+        return False
+    return frame_list[0] is not None
+
+
 class Executor:
     def __init__(
         self,
@@ -48,6 +62,15 @@ class Executor:
 
         for action_id in plan:
             obs_before = self.env.get_observation()
+            # Defensive: env may hand us a frame with no usable grid (real
+            # arc_agi SDK has been observed returning frame=[] mid-episode
+            # on ls20). Stop cleanly rather than crashing with IndexError.
+            if not _has_valid_grid(obs_before):
+                return {
+                    "completed": False,
+                    "actions_taken": actions_taken,
+                    "reason": "env_empty_frame_before",
+                }
             grid_before = obs_before.frame[0]
             percept_before = self.perception.perceive(grid_before)
 
@@ -58,6 +81,15 @@ class Executor:
             )
 
             obs_after, _reward, done, _info = self.env.step(action_id)
+            if not _has_valid_grid(obs_after):
+                # The step was dispatched but the env couldn't produce a
+                # usable post-state. Count the action as taken (it hit the
+                # env) and return with the done flag the env gave us.
+                return {
+                    "completed": bool(done),
+                    "actions_taken": actions_taken + 1,
+                    "reason": "env_empty_frame_after",
+                }
             grid_after = obs_after.frame[0]
             percept_after = self.perception.perceive(grid_after)
             actual = diff_to_actual_observation(percept_before, percept_after)
