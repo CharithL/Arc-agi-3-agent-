@@ -75,14 +75,29 @@ class Executor:
             actions_taken += 1
 
             if is_level_transition:
+                # A full-grid redraw after our action is the game signalling
+                # we reached a goal and the level advanced. Treat it as
+                # completion — the plan worked, even if the env's done flag
+                # didn't propagate (some SDKs only set done on game-end, not
+                # level-end).
+                self.error_analyzer.record(
+                    step=self._step_counter,
+                    action=action_id,
+                    predicted_right=True,
+                    prev_action=prev_action,
+                )
+                self._step_counter += 1
+                return {
+                    "completed": True,
+                    "actions_taken": actions_taken,
+                    "reason": "level_transition_detected",
+                }
+
+            matched = self._matches(prediction, actual)
+            if matched:
                 consecutive_surprises = 0
-                matched = True  # not a prediction failure
             else:
-                matched = self._matches(prediction, actual)
-                if matched:
-                    consecutive_surprises = 0
-                else:
-                    consecutive_surprises += 1
+                consecutive_surprises += 1
 
             self.error_analyzer.record(
                 step=self._step_counter,

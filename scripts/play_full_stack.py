@@ -128,6 +128,11 @@ class _RealEnvAdapter:
                 if new_levels > self._levels_completed:
                     reward = 1.0
                     self._levels_completed = new_levels
+                    # Level advance IS the success signal for M1 — don't wait
+                    # for full-game terminal state.
+                    done = True
+                    if self._verbose:
+                        print(f"[VERBOSE env] LEVEL COMPLETED (levels_completed -> {new_levels})")
             if hasattr(frame, "state"):
                 state_val = str(frame.state)
                 if ("FINISHED" in state_val or "WON" in state_val or "LOST" in state_val) \
