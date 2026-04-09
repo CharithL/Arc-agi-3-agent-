@@ -104,6 +104,25 @@ def _list_games() -> list:
     return sorted([p.name for p in env_dir.iterdir() if p.is_dir()])
 
 
+# Games known to use d-pad / keyboard ACTION1..ACTION5 input semantics.
+# The full-stack agent in its current form only plans with those actions
+# (no x/y click coordinates), so click-based games (bp35 etc.) should be
+# skipped by default. Override with --all to attempt everything.
+# Populate more entries here after you confirm each game via a single
+# verbose run.
+KEYBOARD_GAMES = {
+    "ls20",  # confirmed keyboard (d-pad sprite mover)
+    "tr87",  # confirmed keyboard per user diagnostic
+}
+
+
+def _is_click_game_error(err: str) -> bool:
+    """Heuristic to classify a play_game failure as 'click game not supported'."""
+    markers = ("ACTION6", "requires x", "requires y", "missing coordinate",
+               "coordinate", "click", "ACTION_6")
+    return any(m.lower() in err.lower() for m in markers)
+
+
 def _play_one(game_id: str, model: str, max_levels: int, num_actions: int):
     """
     Play a single game and return (GameResult, error_str_or_None).
@@ -132,7 +151,9 @@ def main() -> int:
     parser.add_argument("--max-levels", type=int, default=5)
     parser.add_argument("--num-actions", type=int, default=8)
     parser.add_argument("--games", default="",
-                        help="Comma-separated subset (default: all games in environment_files/)")
+                        help="Comma-separated subset (default: keyboard games only)")
+    parser.add_argument("--all", action="store_true",
+                        help="Attempt every game in environment_files/, including click games (expect failures)")
     parser.add_argument("--log-dir", default="logs/all_full_stack")
     args = parser.parse_args()
 
@@ -141,14 +162,22 @@ def main() -> int:
 
     if args.games:
         games = [g.strip() for g in args.games.split(",") if g.strip()]
-    else:
+    elif args.all:
         games = _list_games()
+    else:
+        available = set(_list_games())
+        games = sorted(KEYBOARD_GAMES & available)
+        if not games:
+            # Fall back to the full list if the allowlist doesn't match anything
+            # on disk (helps when environment_files/ has different game ids).
+            games = _list_games()
 
     if not games:
         print("ERROR: no games found. Populate environment_files/ or pass --games.")
         return 2
 
-    print(f"[play_all] model={args.model} max_levels={args.max_levels} games={len(games)}")
+    print(f"[play_all] model={args.model} max_levels={args.max_levels} games={len(games)} "
+          f"(mode={'all' if args.all else ('explicit' if args.games else 'keyboard-allowlist')})")
 
     rows = []
     total_levels_completed = 0
@@ -165,8 +194,11 @@ def main() -> int:
 
         log_path = log_dir / f"{game_id}.json"
         if err is not None:
-            print(f"  ERROR after {elapsed:.1f}s: {err.splitlines()[0]}")
-            log_path.write_text(json.dumps({"game_id": game_id, "error": err}, indent=2))
+            classified = "skipped_click_game" if _is_click_game_error(err) else "error"
+            print(f"  {classified.upper()} after {elapsed:.1f}s: {err.splitlines()[0]}")
+            log_path.write_text(json.dumps(
+                {"game_id": game_id, "error": err, "stopped_reason": classified}, indent=2
+            ))
             rows.append({
                 "game_id": game_id,
                 "levels_completed": 0,
@@ -174,7 +206,7 @@ def main() -> int:
                 "total_actions": 0,
                 "total_llm_calls": 0,
                 "wall_time_sec": elapsed,
-                "stopped_reason": "error",
+                "stopped_reason": classified,
                 "error": err.splitlines()[0],
             })
             continue

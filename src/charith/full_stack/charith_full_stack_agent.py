@@ -167,9 +167,52 @@ class CharithFullStackAgent:
             verified, goal, state_desc, num_actions=self.num_actions
         )
 
-        # Phase 6
+        # Phase 6 (initial execution)
         phase_reached = 6
         exec_result = self.executor.execute(plan)
+
+        # Re-plan loop: after the initial plan runs out without completing
+        # the level, re-observe the scene, rebuild the state description,
+        # and call Phase 5 again. The causal table stays intact — we are
+        # not re-learning the rules, just adjusting the path given new
+        # positions.
+        replans_used = 0
+        while (
+            not exec_result.get("completed")
+            and replans_used < self.budgets.max_replans_per_attempt
+        ):
+            new_obs = self.env.get_observation()
+            if new_obs is None or not hasattr(new_obs, "frame") or not new_obs.frame:
+                break
+            new_grid = new_obs.frame[0]
+            new_percept = self.perception.perceive(new_grid)
+
+            new_controllable = self._track_controllable_by_color(
+                new_percept, state_percept, controllable_id
+            )
+            new_target = self._track_controllable_by_color(
+                new_percept, state_percept, target_id
+            )
+
+            if new_controllable is not None and new_target is not None \
+                    and self._is_at_target(new_controllable, new_target):
+                # Heuristic says we've already arrived. Nothing more to do.
+                break
+
+            new_state_desc = self._build_state_description(
+                new_percept, new_grid,
+                new_controllable.object_id if new_controllable else None,
+                new_target.object_id if new_target else None,
+            )
+            new_plan = self.planner.plan(
+                verified, goal, new_state_desc, num_actions=self.num_actions
+            )
+            if not new_plan:
+                break
+            exec_result = self.executor.execute(new_plan)
+            replans_used += 1
+            # Remember latest identified objects for the next iteration
+            state_percept = new_percept
 
         actions_this_attempt = self.table.total_observations - actions_before
         llm_calls_this_attempt = self._current_llm_call_count() - llm_calls_before
@@ -295,6 +338,54 @@ class CharithFullStackAgent:
         objs.sort(key=lambda o: o.size)  # smallest first
         # Skip the largest (background-ish) if there are many
         return objs[0].object_id if objs else None
+
+    def _track_controllable_by_color(self, new_percept, old_percept, old_id):
+        """
+        Re-identify an object across frames without running the full object
+        tracker. Matches by color to the old object, then picks the nearest
+        centroid when ties exist. Returns the new Object or None.
+        """
+        if old_id is None:
+            return None
+        old_obj = next((o for o in old_percept.objects if o.object_id == old_id), None)
+        if old_obj is None:
+            return None
+
+        same_color = [o for o in new_percept.objects if o.color == old_obj.color]
+        if not same_color:
+            return None
+        if len(same_color) == 1:
+            return same_color[0]
+
+        # Closest centroid to the old position wins
+        ocr, occ = old_obj.centroid
+
+        def _d(o):
+            r, c = o.centroid
+            return (r - ocr) ** 2 + (c - occ) ** 2
+
+        return min(same_color, key=_d)
+
+    def _is_at_target(self, controllable, target) -> bool:
+        """
+        Decide whether the controllable has reached the target.
+
+        TODO(user): tune this threshold for your game mix. Current default
+        uses bbox-overlap-OR-centroid-within-3-cells, which handles both
+        "walk onto the tile" and "adjacent push" games. See the insight in
+        the brainstorm note for the trade-offs between exact match, radius,
+        and bounding-box overlap.
+        """
+        # Bounding-box overlap
+        cr0, cc0, cr1, cc1 = controllable.bbox
+        tr0, tc0, tr1, tc1 = target.bbox
+        if cr0 <= tr1 and tr0 <= cr1 and cc0 <= tc1 and tc0 <= cc1:
+            return True
+
+        # Centroid within 3 cells (Chebyshev distance)
+        ccr, ccc = controllable.centroid
+        tcr, tcc = target.centroid
+        return max(abs(ccr - tcr), abs(ccc - tcc)) <= 3
 
     def _identify_target(self, percept, controllable_id):
         """
