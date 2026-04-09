@@ -82,6 +82,7 @@ class CharithFullStackAgent:
         hypotheses = []
         goal = ""
         verified = []
+        evidence = []
         expansions_triggered = []
 
         phase_reached = 1
@@ -113,7 +114,16 @@ class CharithFullStackAgent:
         state_obs = self.env.get_observation()
         state_grid = state_obs.frame[0]
         state_percept = self.perception.perceive(state_grid)
-        state_desc = self._build_state_description(state_percept, state_grid)
+
+        # Identify the controllable by finding the object that actually moved
+        # during exploration. If that fails, fall back to "smallest non-
+        # background object" as the likely sprite.
+        controllable_id = self._identify_controllable(evidence, state_percept)
+        target_id = self._identify_target(state_percept, controllable_id)
+
+        state_desc = self._build_state_description(
+            state_percept, state_grid, controllable_id, target_id
+        )
         plan = self.planner.plan(
             verified, goal, state_desc, num_actions=self.num_actions
         )
@@ -142,14 +152,14 @@ class CharithFullStackAgent:
         """Total LLM calls — works for both real and mock LLMs."""
         return getattr(self.llm, "call_count", 0)
 
-    def _build_state_description(self, percept, grid) -> str:
+    def _build_state_description(self, percept, grid, controllable_id=None, target_id=None) -> str:
         """
         Build a spatial description of the current scene for the planner.
 
         Includes grid size, total object count, and per-object
-        (color, centroid, size) so the LLM can reason about positions and
-        plan paths. The LLM is left to identify which object is the
-        controllable and which is the target — this is the planner's job.
+        (color, centroid, size). When controllable_id / target_id are known
+        from exploration, highlight them explicitly so the LLM plans paths
+        between the right two objects.
         """
         try:
             h, w = grid.shape[:2]
@@ -159,16 +169,106 @@ class CharithFullStackAgent:
         lines = [f"Grid size: {h}x{w}", f"Total objects: {percept.object_count}"]
 
         objs = list(percept.objects) if percept and percept.objects else []
-        # Sort by size (largest first) so the most visually prominent objects
-        # lead the list — capped to avoid prompt bloat on busy scenes.
-        objs.sort(key=lambda o: -o.size)
-        for o in objs[:20]:
+
+        # Highlight controllable + target at the top of the list
+        controllable = next((o for o in objs if o.object_id == controllable_id), None)
+        target = next((o for o in objs if o.object_id == target_id), None)
+
+        if controllable is not None:
+            cr, cc = controllable.centroid
+            lines.append(
+                f"CONTROLLABLE: object_id={controllable.object_id} color={controllable.color} "
+                f"centroid=(row={int(round(cr))}, col={int(round(cc))}) size={controllable.size}"
+            )
+        if target is not None:
+            tr, tc = target.centroid
+            lines.append(
+                f"TARGET (best guess): object_id={target.object_id} color={target.color} "
+                f"centroid=(row={int(round(tr))}, col={int(round(tc))}) size={target.size}"
+            )
+            if controllable is not None:
+                dr = int(round(tr - cr))
+                dc = int(round(tc - cc))
+                lines.append(
+                    f"DISTANCE from controllable to target: "
+                    f"delta_row={dr} delta_col={dc}"
+                )
+
+        lines.append("Other objects:")
+        # Sort rest by size, cap to 15 for prompt budget
+        others = [o for o in objs if o.object_id not in {controllable_id, target_id}]
+        others.sort(key=lambda o: -o.size)
+        for o in others[:15]:
             r, c = o.centroid
             lines.append(
                 f"  object_id={o.object_id} color={o.color} "
                 f"centroid=(row={int(round(r))}, col={int(round(c))}) size={o.size}"
             )
-        if len(objs) > 20:
-            lines.append(f"  ... and {len(objs) - 20} more")
+        if len(others) > 15:
+            lines.append(f"  ... and {len(others) - 15} more")
 
         return "\n".join(lines)
+
+    def _identify_controllable(self, evidence, current_percept):
+        """
+        Find which object moved during Phase 1 exploration by running the
+        object tracker on each action's before/after percepts. The object
+        with the largest cross-frame displacement is the controllable.
+
+        Falls back to the smallest non-background object if exploration
+        didn't yield a clear mover (e.g., nothing moved, or all frames
+        identical).
+        """
+        from charith.perception.object_tracker import ObjectTracker
+
+        tracker = ObjectTracker()
+        best_id = None
+        best_disp = 0.0
+
+        for ev in evidence:
+            if ev.percept_before is None or ev.percept_after is None:
+                continue
+            try:
+                matches = tracker.match(ev.percept_before.objects, ev.percept_after.objects)
+            except Exception:
+                continue
+            before_by_id = {o.object_id: o for o in ev.percept_before.objects}
+            after_by_id = {o.object_id: o for o in ev.percept_after.objects}
+            for before_id, after_id in matches:
+                b = before_by_id.get(before_id)
+                a = after_by_id.get(after_id)
+                if b is None or a is None:
+                    continue
+                dr = a.centroid[0] - b.centroid[0]
+                dc = a.centroid[1] - b.centroid[1]
+                disp = (dr * dr + dc * dc) ** 0.5
+                if disp > best_disp:
+                    best_disp = disp
+                    best_id = after_id
+
+        if best_id is not None and best_disp >= 0.5:
+            return best_id
+
+        # Fallback: smallest non-background object in the current scene
+        objs = list(current_percept.objects) if current_percept.objects else []
+        if not objs:
+            return None
+        objs.sort(key=lambda o: o.size)  # smallest first
+        # Skip the largest (background-ish) if there are many
+        return objs[0].object_id if objs else None
+
+    def _identify_target(self, percept, controllable_id):
+        """
+        Target heuristic: the largest non-controllable, non-background
+        object. Background is assumed to be the largest object overall.
+        The LLM can override this in its reasoning if wrong.
+        """
+        objs = list(percept.objects) if percept.objects else []
+        if not objs:
+            return None
+        objs.sort(key=lambda o: -o.size)  # largest first
+        # Skip largest (background) and any object that matches the controllable
+        for o in objs[1:]:
+            if o.object_id != controllable_id:
+                return o.object_id
+        return None

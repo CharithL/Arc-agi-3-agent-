@@ -24,18 +24,28 @@ Rules come in three tiers:
     actual outcome, use with caution)
   REFUTED: match score < 0.30 (do NOT use these actions for this effect)
 
-You also receive a spatial description of the current scene including grid
-size and the (row, col) position of every object. You must:
-  1. Identify which object is the CONTROLLABLE (the one the rules describe
-     moving) and which is the TARGET (a goal object to reach).
-  2. Compute the row/col distance from controllable to target.
-  3. Translate that distance into a sequence of actions using the confirmed
-     movement rules. For example, if the controllable must move up 14 rows
-     and each "up" action moves 5 cells, that requires 3 "up" actions.
+You also receive a spatial description of the current scene. The orchestrator
+has already identified the CONTROLLABLE object (the one that moves when you
+act) and a best-guess TARGET object. A DISTANCE line gives you delta_row and
+delta_col from controllable to target.
 
-Plan a MULTI-ACTION sequence (typically 4-15 actions) — single-action plans
-are rarely enough to reach a target. Prefer CONFIRMED rules; fall back to
-PARTIALLY VERIFIED when needed. Never use REFUTED rules.
+REQUIRED PROCEDURE:
+  1. Read the DISTANCE line: delta_row is the VERTICAL gap (positive = target
+     is below the controllable; negative = target is above). delta_col is
+     the HORIZONTAL gap (positive = target is to the right; negative = to
+     the left).
+  2. Translate each component into a count of actions:
+        row_moves  = abs(delta_row)  / magnitude_of_up_or_down_action
+        col_moves  = abs(delta_col)  / magnitude_of_left_or_right_action
+     Round UP when the remainder is non-trivial.
+  3. INTERLEAVE the row and column actions into a single plan. Do NOT only
+     use one direction — a 2D target requires both vertical and horizontal
+     movement. Example: if you need 3 down and 2 right with "2=down, 4=right",
+     output [2, 4, 2, 4, 2] (or any interleaving).
+
+Plan a MULTI-ACTION sequence (typically 4-15 actions). Prefer CONFIRMED rules;
+fall back to PARTIALLY VERIFIED when needed. Never use REFUTED rules. If
+multiple confirmed rules describe the same direction, pick one and stick with it.
 
 Respond ONLY with JSON: {"plan": [action_id, action_id, ...], "reasoning": "..."}
 """

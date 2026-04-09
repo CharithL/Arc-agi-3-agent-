@@ -16,7 +16,9 @@ from charith.full_stack.hypothesis_schema import (
 SYSTEM_PROMPT = """You are discovering the rules of an unknown grid game by hypothesis.
 You just observed 8 actions being tried once each.
 
-Generate 3-5 hypotheses about what the game's rules might be.
+Generate one hypothesis for EACH action that produced a change. Do not group
+multiple actions into one hypothesis even if they look similar — every action
+needs its own test so the verifier can run each one independently.
 
 IMPORTANT: Available actions are 1 through 8 only. Your test_action MUST be an
 integer between 1 and 8 inclusive. Any other value is invalid and will be discarded.
