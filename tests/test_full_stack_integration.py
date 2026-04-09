@@ -45,6 +45,20 @@ def test_full_loop_respects_llm_budget():
     assert llm.call_count >= 1
 
 
+def test_play_game_runs_multiple_levels_without_crashing():
+    env = _env_basic()
+    env.reset()
+    llm = MockOllamaReasoner()
+    agent = CharithFullStackAgent(env, llm, num_actions=8)
+
+    result = agent.play_game(game_id="mock_basic", max_levels=3)
+    assert result.levels_attempted >= 1
+    assert result.levels_attempted <= 3
+    assert result.total_actions >= 0
+    assert result.stopped_reason in {"max_levels_reached", "level_failed"}
+    assert result.game_id == "mock_basic"
+
+
 def test_full_loop_refuted_hypotheses_fall_back_to_emergency():
     env = _env_basic()
     env.reset()

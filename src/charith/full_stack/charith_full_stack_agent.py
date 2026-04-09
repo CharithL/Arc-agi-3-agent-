@@ -23,7 +23,8 @@ from charith.alfa_loop.error_checker import ErrorChecker
 from charith.alfa_loop.planner import Planner
 from charith.alfa_loop.executor import Executor
 from charith.full_stack.budgets import AgentBudgets
-from charith.full_stack.results import AttemptResult, LevelResult
+from charith.full_stack.results import AttemptResult, LevelResult, GameResult
+import time
 
 
 class CharithFullStackAgent:
@@ -73,6 +74,44 @@ class CharithFullStackAgent:
                 "num_observations": self.table.total_observations,
                 "active_expansions": self.table.get_active_expansions(),
             },
+        )
+
+    def play_game(self, game_id: str = "", max_levels: int = 5) -> GameResult:
+        """
+        Play multiple levels of the same game in sequence.
+
+        Keeps the causal table and error analyzer intact across levels
+        (mechanics often carry across levels). Resets per-attempt hypothesis
+        state implicitly on each play_level() call.
+
+        Stops early when a level fails completely (no completion after
+        max_attempts_per_level attempts) or when max_levels is reached.
+        """
+        start = time.time()
+        level_results: List[LevelResult] = []
+        levels_completed = 0
+        levels_attempted = 0
+        stopped_reason = "max_levels_reached"
+
+        for level_idx in range(max_levels):
+            levels_attempted += 1
+            lr = self.play_level()
+            level_results.append(lr)
+            if lr.completed:
+                levels_completed += 1
+            else:
+                stopped_reason = "level_failed"
+                break
+
+        return GameResult(
+            game_id=game_id,
+            levels_completed=levels_completed,
+            levels_attempted=levels_attempted,
+            level_results=level_results,
+            total_actions=sum(lr.total_actions for lr in level_results),
+            total_llm_calls=sum(lr.total_llm_calls for lr in level_results),
+            wall_time_sec=time.time() - start,
+            stopped_reason=stopped_reason,
         )
 
     def _play_attempt(self) -> AttemptResult:

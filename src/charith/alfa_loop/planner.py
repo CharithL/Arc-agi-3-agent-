@@ -7,12 +7,54 @@ per design §6.4 (Option C: when LLM fails, fall back to mechanistic
 component).
 """
 
-from typing import List
+from typing import List, Optional
 import math
 import random
+import re
 
 from charith.causal_engine.table_model import ArcTableModel
 from charith.full_stack.hypothesis_schema import Hypothesis
+
+
+_INT_RE = re.compile(r"-?\d+")
+
+
+def _coerce_action(value, num_actions: int) -> Optional[int]:
+    """
+    Coerce an LLM plan entry to an integer in [1, num_actions].
+
+    Handles:
+      - plain int: 3
+      - int-like string: "3", " 3 "
+      - prose: "action 3", "ACTION_3", "action8: move up"
+      - lists/dicts that contain a number: {"action": 3}
+    Returns None if no valid integer in range is found.
+    """
+    try:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value if 1 <= value <= num_actions else None
+        if isinstance(value, float):
+            iv = int(value)
+            return iv if 1 <= iv <= num_actions else None
+        if isinstance(value, str):
+            m = _INT_RE.search(value)
+            if m:
+                iv = int(m.group(0))
+                return iv if 1 <= iv <= num_actions else None
+            return None
+        if isinstance(value, dict):
+            for v in value.values():
+                coerced = _coerce_action(v, num_actions)
+                if coerced is not None:
+                    return coerced
+            return None
+        if isinstance(value, (list, tuple)) and value:
+            return _coerce_action(value[0], num_actions)
+    except (TypeError, ValueError):
+        return None
+    return None
 
 
 SYSTEM_PROMPT = """You are planning actions in a grid game.
@@ -97,12 +139,9 @@ class Planner:
         raw_plan = result.get("plan", []) if isinstance(result, dict) else []
         valid_plan: List[int] = []
         for a in raw_plan:
-            try:
-                ia = int(a)
-                if 1 <= ia <= num_actions:
-                    valid_plan.append(ia)
-            except (TypeError, ValueError):
-                continue
+            coerced = _coerce_action(a, num_actions)
+            if coerced is not None:
+                valid_plan.append(coerced)
 
         if not valid_plan:
             return self._emergency_fallback(num_actions)

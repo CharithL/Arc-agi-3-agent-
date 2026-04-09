@@ -25,3 +25,16 @@ class LevelResult:
     total_actions: int
     total_llm_calls: int
     final_table_stats: Dict
+
+
+@dataclass
+class GameResult:
+    """Result of playing multiple levels of a single game."""
+    game_id: str
+    levels_completed: int
+    levels_attempted: int
+    level_results: List[LevelResult] = field(default_factory=list)
+    total_actions: int = 0
+    total_llm_calls: int = 0
+    wall_time_sec: float = 0.0
+    stopped_reason: str = ""
