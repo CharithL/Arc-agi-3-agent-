@@ -18,6 +18,9 @@ You just observed 8 actions being tried once each.
 
 Generate 3-5 hypotheses about what the game's rules might be.
 
+IMPORTANT: Available actions are 1 through 8 only. Your test_action MUST be an
+integer between 1 and 8 inclusive. Any other value is invalid and will be discarded.
+
 CRITICAL: Each hypothesis must be TESTABLE. Your expected_outcome MUST be STRUCTURED
 (schema below). Do not describe expected outcomes in prose. Only populate fields you
 are actually predicting; leave others null.

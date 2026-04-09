@@ -16,11 +16,26 @@ from charith.full_stack.hypothesis_schema import Hypothesis
 
 
 SYSTEM_PROMPT = """You are planning actions in a grid game.
-You receive VERIFIED causal rules (tested through intervention — ground truth).
-You also have a goal description and a description of the current state.
+You receive causal rules that have been tested through intervention.
 
-Plan an efficient sequence of actions to achieve the goal.
-Use only actions that appear in CONFIRMED rules. Avoid REFUTED rules.
+Rules come in three tiers:
+  CONFIRMED: match score >= 0.70 (high-confidence ground truth)
+  PARTIALLY VERIFIED: match score in [0.30, 0.70) (some prediction matched
+    actual outcome, use with caution)
+  REFUTED: match score < 0.30 (do NOT use these actions for this effect)
+
+You also receive a spatial description of the current scene including grid
+size and the (row, col) position of every object. You must:
+  1. Identify which object is the CONTROLLABLE (the one the rules describe
+     moving) and which is the TARGET (a goal object to reach).
+  2. Compute the row/col distance from controllable to target.
+  3. Translate that distance into a sequence of actions using the confirmed
+     movement rules. For example, if the controllable must move up 14 rows
+     and each "up" action moves 5 cells, that requires 3 "up" actions.
+
+Plan a MULTI-ACTION sequence (typically 4-15 actions) — single-action plans
+are rarely enough to reach a target. Prefer CONFIRMED rules; fall back to
+PARTIALLY VERIFIED when needed. Never use REFUTED rules.
 
 Respond ONLY with JSON: {"plan": [action_id, action_id, ...], "reasoning": "..."}
 """
@@ -40,22 +55,30 @@ class Planner:
         num_actions: int = 8,
     ) -> List[int]:
         confirmed = [h for h in verified if h.status == "confirmed"]
+        ambiguous = [h for h in verified if h.status == "ambiguous"]
+        refuted = [h for h in verified if h.status == "refuted"]
 
-        if not confirmed:
+        # Emergency fallback only when there is no usable tier at all
+        if not confirmed and not ambiguous:
             return self._emergency_fallback(num_actions)
 
         confirmed_text = "\n".join(
-            f"  CONFIRMED: action {h.test_action} → {h.actual_summary or h.rule}"
+            f"  CONFIRMED: action {h.test_action} -> {h.actual_summary or h.rule}"
             for h in confirmed
-        )
-        refuted = [h for h in verified if h.status == "refuted"]
-        refuted_text = "\n".join(f"  REFUTED: {h.rule}" for h in refuted)
+        ) or "  (none)"
+        ambiguous_text = "\n".join(
+            f"  PARTIALLY VERIFIED: action {h.test_action} -> "
+            f"{h.actual_summary or h.rule} (score={h.match_score:.2f})"
+            for h in ambiguous
+        ) or "  (none)"
+        refuted_text = "\n".join(f"  REFUTED: {h.rule}" for h in refuted) or "  (none)"
 
         user = (
             f"Current state: {state_desc}\n"
             f"Goal: {goal}\n\n"
-            f"Verified rules (ground truth):\n{confirmed_text}\n\n"
-            f"Refuted hypotheses (do NOT use):\n{refuted_text or '  (none)'}\n\n"
+            f"CONFIRMED rules (high-confidence ground truth):\n{confirmed_text}\n\n"
+            f"PARTIALLY VERIFIED rules (use with caution):\n{ambiguous_text}\n\n"
+            f"REFUTED hypotheses (do NOT use):\n{refuted_text}\n\n"
             f"Plan the shortest action sequence to reach the goal."
         )
 

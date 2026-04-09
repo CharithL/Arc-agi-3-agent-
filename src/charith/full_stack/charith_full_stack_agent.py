@@ -111,8 +111,9 @@ class CharithFullStackAgent:
         # Phase 5
         phase_reached = 5
         state_obs = self.env.get_observation()
-        state_percept = self.perception.perceive(state_obs.frame[0])
-        state_desc = f"objects={state_percept.object_count}"
+        state_grid = state_obs.frame[0]
+        state_percept = self.perception.perceive(state_grid)
+        state_desc = self._build_state_description(state_percept, state_grid)
         plan = self.planner.plan(
             verified, goal, state_desc, num_actions=self.num_actions
         )
@@ -140,3 +141,34 @@ class CharithFullStackAgent:
     def _current_llm_call_count(self) -> int:
         """Total LLM calls — works for both real and mock LLMs."""
         return getattr(self.llm, "call_count", 0)
+
+    def _build_state_description(self, percept, grid) -> str:
+        """
+        Build a spatial description of the current scene for the planner.
+
+        Includes grid size, total object count, and per-object
+        (color, centroid, size) so the LLM can reason about positions and
+        plan paths. The LLM is left to identify which object is the
+        controllable and which is the target — this is the planner's job.
+        """
+        try:
+            h, w = grid.shape[:2]
+        except Exception:
+            h, w = 0, 0
+
+        lines = [f"Grid size: {h}x{w}", f"Total objects: {percept.object_count}"]
+
+        objs = list(percept.objects) if percept and percept.objects else []
+        # Sort by size (largest first) so the most visually prominent objects
+        # lead the list — capped to avoid prompt bloat on busy scenes.
+        objs.sort(key=lambda o: -o.size)
+        for o in objs[:20]:
+            r, c = o.centroid
+            lines.append(
+                f"  object_id={o.object_id} color={o.color} "
+                f"centroid=(row={int(round(r))}, col={int(round(c))}) size={o.size}"
+            )
+        if len(objs) > 20:
+            lines.append(f"  ... and {len(objs) - 20} more")
+
+        return "\n".join(lines)

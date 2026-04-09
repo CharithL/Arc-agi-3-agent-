@@ -12,10 +12,17 @@ Walk the plan. At each step:
 
 from typing import Dict, List
 
+import numpy as np
+
 from charith.perception.core_knowledge import CoreKnowledgePerception
 from charith.causal_engine.table_model import ArcTableModel
 from charith.causal_engine.error_analyzer import ArcErrorAnalyzer
 from charith.full_stack.percept_diff import diff_to_actual_observation
+
+
+# When >= this fraction of cells change after one action, it's a level
+# transition or global reset, not a normal controllable effect.
+_LEVEL_TRANSITION_CHANGE_FRACTION = 0.5
 
 
 class Executor:
@@ -41,7 +48,8 @@ class Executor:
 
         for action_id in plan:
             obs_before = self.env.get_observation()
-            percept_before = self.perception.perceive(obs_before.frame[0])
+            grid_before = obs_before.frame[0]
+            percept_before = self.perception.perceive(grid_before)
 
             prediction = self.table.predict(
                 action=action_id,
@@ -50,20 +58,31 @@ class Executor:
             )
 
             obs_after, _reward, done, _info = self.env.step(action_id)
-            percept_after = self.perception.perceive(obs_after.frame[0])
+            grid_after = obs_after.frame[0]
+            percept_after = self.perception.perceive(grid_after)
             actual = diff_to_actual_observation(percept_before, percept_after)
 
+            # Detect level transition: when nearly every cell changes at
+            # once, the step wasn't a normal movement — it's a scene reset.
+            # Don't penalize the table or count it as a surprise.
+            is_level_transition = self._is_level_transition(grid_before, grid_after)
+
             change_desc = (
-                f"direction={actual.controllable_direction},mag={actual.controllable_magnitude}"
+                "level_transition" if is_level_transition
+                else f"direction={actual.controllable_direction},mag={actual.controllable_magnitude}"
             )
             self.table.record(action=action_id, changes=[change_desc])
             actions_taken += 1
 
-            matched = self._matches(prediction, actual)
-            if matched:
+            if is_level_transition:
                 consecutive_surprises = 0
+                matched = True  # not a prediction failure
             else:
-                consecutive_surprises += 1
+                matched = self._matches(prediction, actual)
+                if matched:
+                    consecutive_surprises = 0
+                else:
+                    consecutive_surprises += 1
 
             self.error_analyzer.record(
                 step=self._step_counter,
@@ -93,6 +112,18 @@ class Executor:
             "actions_taken": actions_taken,
             "reason": "plan_exhausted",
         }
+
+    def _is_level_transition(self, grid_before, grid_after) -> bool:
+        """Return True if a majority of cells changed — likely a scene reset."""
+        try:
+            gb = np.asarray(grid_before)
+            ga = np.asarray(grid_after)
+            if gb.shape != ga.shape or gb.size == 0:
+                return False
+            frac_changed = float(np.sum(gb != ga)) / float(gb.size)
+            return frac_changed >= _LEVEL_TRANSITION_CHANGE_FRACTION
+        except Exception:
+            return False
 
     def _matches(self, prediction, actual) -> bool:
         """
