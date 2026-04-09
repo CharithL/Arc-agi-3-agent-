@@ -370,11 +370,16 @@ class CharithFullStackAgent:
         """
         Decide whether the controllable has reached the target.
 
-        TODO(user): tune this threshold for your game mix. Current default
-        uses bbox-overlap-OR-centroid-within-3-cells, which handles both
-        "walk onto the tile" and "adjacent push" games. See the insight in
-        the brainstorm note for the trade-offs between exact match, radius,
-        and bounding-box overlap.
+        Threshold rationale (user-confirmed 2026-04-09):
+          The ls20 sprite is ~7x7 pixels and moves in steps of 5. With a
+          3-cell Chebyshev tolerance, the agent declares arrival when it
+          is within one move of the target — close enough that the next
+          movement step will overshoot or land on it. Stricter matching
+          risks never declaring arrival when the sprite lands 1-2 pixels
+          off-center from the target.
+
+        Kept deliberately loose. Revisit if a game has tight collision
+        semantics where 3 cells is too much slop.
         """
         # Bounding-box overlap
         cr0, cc0, cr1, cc1 = controllable.bbox
