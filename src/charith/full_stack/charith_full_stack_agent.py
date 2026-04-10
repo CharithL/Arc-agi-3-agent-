@@ -22,6 +22,7 @@ from charith.alfa_loop.verifier import Verifier
 from charith.alfa_loop.error_checker import ErrorChecker
 from charith.alfa_loop.planner import Planner
 from charith.alfa_loop.executor import Executor
+from charith.alfa_loop._frame_utils import has_valid_grid
 from charith.full_stack.budgets import AgentBudgets
 from charith.full_stack.results import AttemptResult, LevelResult, GameResult
 import time
@@ -151,6 +152,22 @@ class CharithFullStackAgent:
         # Phase 5
         phase_reached = 5
         state_obs = self.env.get_observation()
+        # Defense-in-depth: if the SDK handed us an invalid frame during any
+        # earlier phase, _latest is stale/empty here. Return a structured
+        # AttemptResult rather than crashing on state_obs.frame[0].
+        if not has_valid_grid(state_obs):
+            return AttemptResult(
+                completed=False,
+                actions_taken=self.table.total_observations - actions_before,
+                llm_calls=self._current_llm_call_count() - llm_calls_before,
+                reason="env_empty_frame_pre_plan",
+                phase_reached=phase_reached,
+                hypotheses_generated=len(hypotheses),
+                hypotheses_confirmed=sum(1 for h in verified if h.status == "confirmed"),
+                hypotheses_refuted=sum(1 for h in verified if h.status == "refuted"),
+                expansions_triggered=expansions_triggered,
+                final_error_summary=self.error_analyzer.analyze().get("summary", ""),
+            )
         state_grid = state_obs.frame[0]
         state_percept = self.perception.perceive(state_grid)
 

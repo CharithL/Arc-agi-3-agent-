@@ -16,6 +16,7 @@ import numpy as np
 from charith.perception.core_knowledge import CoreKnowledgePerception, StructuredPercept
 from charith.causal_engine.table_model import ArcTableModel
 from charith.full_stack.percept_diff import diff_to_actual_observation
+from charith.alfa_loop._frame_utils import has_valid_grid
 
 
 @dataclass
@@ -40,11 +41,21 @@ class Explorer:
 
         for action_id in range(1, num_actions + 1):
             obs_before = self.env.get_observation()
-            grid_before = obs_before.frame[0] if obs_before is not None else None
+            # Guard against SDK returning an invalid frame (see _frame_utils).
+            # If the frame is bad before the action, we can't establish a
+            # baseline — stop exploring and return whatever evidence we have.
+            if not has_valid_grid(obs_before):
+                break
+            grid_before = obs_before.frame[0]
             percept_before = self.perception.perceive(grid_before)
 
             obs_after, reward, done, _info = self.env.step(action_id)
-            grid_after = obs_after.frame[0] if obs_after is not None else None
+            # Guard against the same SDK quirk on the post-step frame.
+            # If the frame is bad after the action, we still counted the
+            # action against the env but can't score it — stop cleanly.
+            if not has_valid_grid(obs_after):
+                break
+            grid_after = obs_after.frame[0]
             percept_after = self.perception.perceive(grid_after)
 
             changes = self._summarise_changes(

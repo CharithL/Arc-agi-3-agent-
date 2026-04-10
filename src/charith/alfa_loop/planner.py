@@ -131,7 +131,10 @@ class Planner:
             f"CONFIRMED rules (high-confidence ground truth):\n{confirmed_text}\n\n"
             f"PARTIALLY VERIFIED rules (use with caution):\n{ambiguous_text}\n\n"
             f"REFUTED hypotheses (do NOT use):\n{refuted_text}\n\n"
-            f"Plan the shortest action sequence to reach the goal."
+            f"Plan the shortest action sequence to reach the goal. "
+            f"ACTION LIMITATION: Do NOT use the same PARTIALLY VERIFIED action "
+            f"more than 3 times consecutively as this may lead to invalid game "
+            f"states. Prefer CONFIRMED actions when possible."
         )
 
         result = self.llm.reason_json(SYSTEM_PROMPT, user)

@@ -18,25 +18,12 @@ from charith.perception.core_knowledge import CoreKnowledgePerception
 from charith.causal_engine.table_model import ArcTableModel
 from charith.causal_engine.error_analyzer import ArcErrorAnalyzer
 from charith.full_stack.percept_diff import diff_to_actual_observation
+from charith.alfa_loop._frame_utils import has_valid_grid as _has_valid_grid
 
 
 # When >= this fraction of cells change after one action, it's a level
 # transition or global reset, not a normal controllable effect.
 _LEVEL_TRANSITION_CHANGE_FRACTION = 0.5
-
-
-def _has_valid_grid(obs) -> bool:
-    """
-    True when `obs` has a non-empty .frame list whose first element is a
-    usable grid (not None). Guards every Executor loop iteration against
-    the real arc_agi SDK quirk of returning frame=[] mid-episode.
-    """
-    if obs is None:
-        return False
-    frame_list = getattr(obs, "frame", None)
-    if not frame_list:
-        return False
-    return frame_list[0] is not None
 
 
 class Executor:

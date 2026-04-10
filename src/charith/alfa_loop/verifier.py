@@ -20,6 +20,7 @@ from charith.causal_engine.error_analyzer import ArcErrorAnalyzer
 from charith.full_stack.hypothesis_schema import Hypothesis
 from charith.full_stack.match_score import compute_match_score
 from charith.full_stack.percept_diff import diff_to_actual_observation
+from charith.alfa_loop._frame_utils import has_valid_grid
 
 
 CONFIRM_THRESHOLD = 0.70
@@ -52,9 +53,17 @@ class Verifier:
                 continue
 
             obs_before = self.env.get_observation()
+            # Defense-in-depth: SDK may return an empty frame mid-episode.
+            # Mark the hypothesis untestable and skip rather than crash.
+            if not has_valid_grid(obs_before):
+                h.status = "untestable"
+                continue
             percept_before = self.perception.perceive(obs_before.frame[0])
 
             obs_after, _reward, done, _info = self.env.step(h.test_action)
+            if not has_valid_grid(obs_after):
+                h.status = "untestable"
+                continue
             percept_after = self.perception.perceive(obs_after.frame[0])
 
             actual = diff_to_actual_observation(percept_before, percept_after)

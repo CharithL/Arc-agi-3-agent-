@@ -27,6 +27,11 @@ CRITICAL: Each hypothesis must be TESTABLE. Your expected_outcome MUST be STRUCT
 (schema below). Do not describe expected outcomes in prose. Only populate fields you
 are actually predicting; leave others null.
 
+WARNING: If any action's movement magnitude exceeds 30% of the grid size
+(e.g., 20+ cells on a 64-cell grid), this is likely NOT a simple movement
+game. Consider rotation, wrapping, or state-change mechanics instead of
+d-pad movement.
+
 ExpectedOutcome schema:
 {
   "direction": "up|down|left|right|none",
