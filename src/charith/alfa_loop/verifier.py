@@ -45,8 +45,18 @@ class Verifier:
         """
         Test each hypothesis in order. State drift between tests is
         accepted per design §2.4 (user-approved).
+
+        Wall-collision override: before Phase 3 starts writing its own
+        records into table.single_table, snapshot which actions already
+        have a 'moved' entry from Phase 1 exploration. When a hypothesis
+        would otherwise be refuted AND the action was observed moving
+        in Phase 1, override the verdict to 'ambiguous' — the rule is
+        real, the sprite just can't move that direction from its current
+        position (most commonly a wall collision). See the regression
+        test test_wall_collision_becomes_ambiguous_not_refuted.
         """
         prev_action: Optional[int] = self.table.prev_action
+        actions_moved_in_phase1 = self._snapshot_phase1_movers()
 
         for h in hypotheses:
             if h.status == "untestable":
@@ -81,6 +91,21 @@ class Verifier:
                 h.status = "ambiguous"
                 predicted_right = False
 
+            # Wall-collision override: a directional hypothesis that would
+            # be refuted, when the action had already shown movement during
+            # Phase 1 exploration, is more likely a temporary state block
+            # (at a wall, blocked by another object) than a false rule.
+            # Downgrade refuted -> ambiguous so the Planner keeps the rule
+            # available for re-planning after the sprite moves away.
+            if (
+                h.status == "refuted"
+                and h.expected is not None
+                and h.expected.direction is not None
+                and h.test_action in actions_moved_in_phase1
+            ):
+                h.status = "ambiguous"
+                predicted_right = False  # still a prediction miss for the analyzer
+
             change_desc = f"direction={actual.controllable_direction},mag={actual.controllable_magnitude}"
             self.table.record(action=h.test_action, changes=[change_desc])
 
@@ -97,6 +122,27 @@ class Verifier:
                 break
 
         return hypotheses
+
+    def _snapshot_phase1_movers(self) -> set:
+        """
+        Return the set of action ids that have at least one 'moved' entry
+        in table.single_table right now. Called once at the start of
+        verify() so we capture ONLY the Phase 1 exploration record, before
+        any Phase 3 verification writes pollute the signal.
+
+        A frozenset entry counts as 'moved' if any of its elements
+        contains the substring 'moved' (e.g. 'action 1: moved up by 5').
+        """
+        movers = set()
+        for action_id, entries in self.table.single_table.items():
+            for frozen in entries:
+                for change_str in frozen:
+                    if isinstance(change_str, str) and "moved" in change_str:
+                        movers.add(action_id)
+                        break
+                if action_id in movers:
+                    break
+        return movers
 
     def _summarise(self, actual) -> str:
         parts = []
