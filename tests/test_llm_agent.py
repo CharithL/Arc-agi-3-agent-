@@ -16,6 +16,7 @@ from charith.llm_agent.context_manager import ContextManager
 from charith.llm_agent.ollama_client import OllamaClient
 from charith.llm_agent.response_parser import ResponseParser
 from charith.llm_agent.agent import LLMAgent
+from charith.config import PROFILE_LEGACY
 
 
 # ---- helpers ---------------------------------------------------------------
@@ -268,8 +269,7 @@ class TestLLMAgent:
     def test_agent_act_mock(self):
         """agent.act() returns valid action using mock LLM."""
         agent = LLMAgent()
-        # Ensure we're using mock
-        assert not agent.llm.available or True  # works either way
+        agent.llm._backend = "mock"  # offline determinism (§2.3)
 
         grid = _make_grid()
         action = agent.act(grid)
@@ -280,6 +280,7 @@ class TestLLMAgent:
     def test_agent_act_multiple_ticks(self):
         """Agent handles multiple ticks and builds context."""
         agent = LLMAgent()
+        agent.llm._backend = "mock"  # offline determinism (§2.3)
         grid1 = _make_grid()
         grid2 = _make_grid_shifted()
 
@@ -292,8 +293,14 @@ class TestLLMAgent:
         assert len(agent.context.full_history) == 2
 
     def test_agent_c1_expansion_from_response(self):
-        """C1 expansion in response updates c1c2 framework."""
-        agent = LLMAgent()
+        """C1 expansion in response updates c1c2 framework (LEGACY path).
+
+        Under PROFILE_PATH6 ungated say-so expansion is DEAD (guide §2.4 step 8):
+        expansion is gated on machine-verified orphan events. This test pins the
+        legacy path, which must keep working.
+        """
+        agent = LLMAgent(config=PROFILE_LEGACY)
+        agent.llm._backend = "mock"  # force mock so the override below is used
         # Override the mock to return a C1 expansion
         original_mock = agent.llm._mock_response
 

@@ -9,17 +9,26 @@ No training required -- the LLM already knows how to reason.
 
 from __future__ import annotations
 
-from typing import List, Optional, Set
+from typing import Dict, List, Optional, Set
 
 import numpy as np
 
+from charith.config import AgentConfig, PROFILE_PATH6
 from charith.perception.core_knowledge import CoreKnowledgePerception, StructuredPercept
-from charith.perception.object_tracker import ObjectTracker
+from charith.perception.object_tracker import ObjectTracker, PerceptEvent
 from charith.llm_agent.translator import PerceptTranslator
 from charith.llm_agent.c1c2_framework import C1C2Framework
 from charith.llm_agent.context_manager import ContextManager
 from charith.llm_agent.llm_client import LLMClient
 from charith.llm_agent.response_parser import ResponseParser
+from charith.llm_agent.schema import RESPONSE_FORMAT_BLOCK, sanitize_requests
+from charith.llm_agent.decision import (
+    IncidentLog,
+    run_decision,
+    least_tried_fallback,
+)
+from charith.hum.ledger import Ledger, ExpansionGate
+from charith.eval.episode import EpisodeRecorder as _EpisodeRecorder
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +116,27 @@ until it stops working or you reach your goal.
 """
 
 
+# Path 6 system prompt: the falsification contract. The RESPONSE FORMAT block
+# (from schema.py) is appended so the schema is grounded in the prompt even
+# under constrained decoding.
+PATH6_SYSTEM_PROMPT = """You are CHARITH, an agent playing an unknown grid game.
+
+You reason with a conceptual vocabulary (C1) and test HYPOTHESES against reality.
+Objects have STABLE ids (obj_007) that persist across ticks — reason about them
+as nouns. Each tick you observe the events your last action produced.
+
+THE RULE OF THE HUM: every action must TEST a hypothesis. Before acting you
+predict a CHECKABLE effect (MOVE/COLOR_CHANGE/APPEAR/DISAPPEAR/TRANSFORM/
+SCORE_CHANGE/NO_EFFECT). The prediction is machine-scored against the next
+observation. A prediction that cannot fail is worthless — never predict UNKNOWN
+when you can predict something falsifiable.
+
+To grow your vocabulary, add "EXPAND:<CONCEPT> because <reason>" to requests.
+Expansion is GRANTED ONLY when an event occurred that no current concept
+explains (machine-verified surprise). Asking without unexplained events is
+denied — make a prediction that fails first."""
+
+
 # ---------------------------------------------------------------------------
 # LLMAgent
 # ---------------------------------------------------------------------------
@@ -118,10 +148,17 @@ class LLMAgent:
         self,
         model: str = "gemma3:12b",
         temperature: float = 0.3,
+        config: Optional[AgentConfig] = None,
     ) -> None:
+        # Path 6 feature flags. Defaults to PROFILE_PATH6; pass PROFILE_LEGACY
+        # (or a --profile-derived config) to reproduce Path-5 behavior.
+        self.config: AgentConfig = config if config is not None else PROFILE_PATH6
+
         # Perception
         self.perception = CoreKnowledgePerception()
-        self.object_tracker = ObjectTracker()
+        self.object_tracker = ObjectTracker(
+            occlusion_grace_ticks=self.config.occlusion_grace_ticks
+        )
 
         # LLM pipeline
         self.translator = PerceptTranslator()
@@ -138,9 +175,31 @@ class LLMAgent:
         self._last_action: int = 0
         self._available_actions: List[int] = [1, 2, 3, 4]
 
+        # --- Path 6 falsification engine (S3.5 live wiring) ---------------
+        self.ledger = Ledger(enforce=self.config.enforce_predictions)
+        self.expansion_gate = ExpansionGate(config=self.config)
+        self.incidents = IncidentLog(None)          # no-op until play_game sets a run dir
+        self._tried_counts: Dict[str, int] = {}
+        self._prev_score: int = 0
+        self._pending_prompt_note: str = ""          # denial / dropped-request feedback
+        self._last_tracked_oids: Set[str] = set()
+
     # ---- public API --------------------------------------------------------
 
-    def act(self, observation, available_actions: Optional[List[int]] = None) -> int:
+    def act(self, observation, available_actions: Optional[List[int]] = None,
+            score: Optional[int] = None) -> int:
+        """Dispatch to the legacy or Path-6 tick loop based on config.
+
+        Under PROFILE_LEGACY (``structured_decisions=False``) the Path-5 loop
+        runs verbatim. Under PROFILE_PATH6 the falsification engine goes live:
+        tracker -> events -> ledger.resolve -> constrained decision -> validate
+        -> ledger.record (S3.5 integration checkpoint).
+        """
+        if not self.config.structured_decisions:
+            return self._act_legacy(observation, available_actions)
+        return self._act_path6(observation, available_actions, score)
+
+    def _act_legacy(self, observation, available_actions: Optional[List[int]] = None) -> int:
         """Full pipeline: perceive -> translate -> prompt -> LLM -> parse -> action.
 
         Parameters
@@ -272,7 +331,207 @@ class LLMAgent:
 
         return parsed["action"]
 
-    def play_game(self, game_id: str, max_actions: int = 200):
+    # ---- Path 6 tick loop (S3.5 live falsification engine) -----------------
+
+    def _act_path6(self, observation, available_actions: Optional[List[int]] = None,
+                   score: Optional[int] = None) -> int:
+        if available_actions is not None:
+            self._available_actions = available_actions
+        self._tick += 1
+
+        grid = self._parse_observation(observation)
+
+        # Action contingency feeds controllable detection (used by translator).
+        if self._prev_grid is not None and self._tick > 1:
+            self.perception.agency.record_action_contingency(
+                str(self._last_action), self._prev_grid, grid
+            )
+
+        percept = self.perception.perceive(grid)
+
+        # Controllable detection (translator goal/progress sections still use it).
+        if self._tick > 2 and self.perception.agency._contingencies:
+            ctrl_ids = self.perception.agency.detect_controllable_objects(
+                percept.objects, self.perception.agency._contingencies
+            )
+            if ctrl_ids:
+                self._controllable_ids = set(ctrl_ids)
+        for obj in percept.objects:
+            if obj.object_id in self._controllable_ids:
+                self.perception.agency.record_object_displacement(obj.object_id, obj.centroid)
+
+        # S2 — persistent identity: stable oids + events (replaces discard-match).
+        tracked, events = self.object_tracker.update(percept.objects, self._tick)
+        live_oids = {t.oid for t in tracked}
+        self._last_tracked_oids = live_oids
+
+        cur_score = int(score) if score is not None else self._prev_score
+        score_delta = cur_score - self._prev_score
+
+        # S3 — resolve the PREVIOUS tick's prediction first (machine-scored).
+        outcome = None
+        if self.ledger.has_pending():
+            outcome = self.ledger.resolve(self._tick, events, score_delta, live_oids=live_oids)
+
+        hum_feedback = self._render_hum_feedback(outcome)
+
+        observation_text = self.translator.translate(
+            percept, prev_percept=self._prev_percept,
+            controllable_ids=self._controllable_ids, tick=self._tick,
+            available_actions=self._available_actions,
+        )
+        events_text = self._build_events_text(tracked, events)
+        user_prompt = self._build_path6_prompt(observation_text, events_text, hum_feedback)
+
+        legal_actions = [str(a) for a in self._available_actions]
+        system_prompt = PATH6_SYSTEM_PROMPT + "\n\n" + RESPONSE_FORMAT_BLOCK
+        first_call = self._tick == 1
+
+        def _query(prompt: str) -> str:
+            return self.llm.query_structured(
+                system_prompt, prompt, self.config, legal_actions,
+                incidents=self.incidents, first_call=first_call,
+            )
+
+        def _fallback() -> str:
+            return least_tried_fallback(legal_actions, self._tried_counts)
+
+        result = run_decision(
+            _query, user_prompt, config=self.config, bank=None,
+            legal_actions=legal_actions, live_oids=live_oids,
+            fallback=_fallback, incidents=self.incidents,
+        )
+
+        if result.decision is not None:
+            decision = result.decision
+        else:
+            # Fallback fired: synthesize a Decision for the fallback action so the
+            # ledger still records this tick (record-before-execute invariant).
+            decision = self._fallback_decision(result.fallback_action)
+
+        action_id = decision.action.action_id
+
+        # Route advisory requests (gated expansion / dropped-request notes).
+        self._route_requests(decision)
+
+        # S3 invariant — record the prediction BEFORE executing. The recorded
+        # action and the executed action are the same object; they cannot diverge.
+        self.ledger.record(self._tick, decision)
+
+        self.context.add_tick(
+            tick=self._tick,
+            observation=observation_text[:200],
+            action=self._to_int(action_id),
+            result_description=(outcome.outcome if outcome else "initial observation"),
+            hypothesis=decision.hypothesis_id,
+            c1_expansion=None,
+            is_important=self._tick <= 3,
+        )
+
+        self._prev_percept = percept
+        self._prev_grid = grid.copy()
+        self._last_action = self._to_int(action_id) or self._last_action
+        self._prev_score = cur_score
+        self._tried_counts[action_id] = self._tried_counts.get(action_id, 0) + 1
+
+        chosen = self._to_int(action_id)
+        return chosen if chosen else self._available_actions[0]
+
+    # ---- Path 6 helpers ----------------------------------------------------
+
+    @staticmethod
+    def _to_int(action_id: str) -> int:
+        try:
+            return int(action_id)
+        except (TypeError, ValueError):
+            return 0
+
+    def _fallback_decision(self, action_id: str):
+        from charith.llm_agent.schema import Decision, PredictedEffect, ActionChoice
+        return Decision(
+            tick=self._tick,
+            hypothesis_id="EXPLORE",
+            predicted_effect=PredictedEffect(kind="UNKNOWN"),
+            action=ActionChoice(action_id=str(action_id)),
+            confidence=0.0,
+            notes="fallback action (invalid LLM decision)",
+        )
+
+    def _render_hum_feedback(self, outcome) -> str:
+        lines: List[str] = []
+        if outcome is not None:
+            p = outcome.predicted
+            oid = f" {p.object_id}" if p.object_id else ""
+            detail = f" {p.detail}" if p.detail else ""
+            lines.append(
+                f"Last prediction: {p.kind}{oid}{detail} "
+                f"({outcome.hypothesis_id}) -> {outcome.outcome}."
+            )
+        orphans = self.ledger.orphans(self.config.orphan_window)
+        if orphans:
+            summary = ", ".join(f"{e.oid} {e.kind}" for e in orphans[:4])
+            lines.append(f"Unexplained events last {self.config.orphan_window} ticks: {summary}.")
+        if self._pending_prompt_note:
+            lines.append(self._pending_prompt_note)
+            self._pending_prompt_note = ""
+        return "\n".join(lines)
+
+    def _build_events_text(self, tracked: List, events: List[PerceptEvent]) -> str:
+        lines = ["Tracked objects (stable ids):"]
+        for t in sorted(tracked, key=lambda o: o.oid)[:10]:
+            lines.append(
+                f"  {t.oid}: color {t.color} at "
+                f"({t.centroid[0]:.0f},{t.centroid[1]:.0f})"
+            )
+        if events:
+            lines.append("Events since last action:")
+            for e in events[:12]:
+                lines.append(f"  {e.oid} {e.kind} {e.detail}")
+        return "\n".join(lines)
+
+    def _build_path6_prompt(self, observation_text: str, events_text: str,
+                            hum_feedback: str) -> str:
+        parts = [self.c1c2.get_c1_text(), ""]
+        if hum_feedback:
+            parts += [hum_feedback, ""]
+        parts += [
+            events_text, "",
+            "--- CURRENT OBSERVATION ---",
+            observation_text, "",
+            f"Choose an action_id from: {self._available_actions}",
+        ]
+        return "\n".join(parts)
+
+    def _is_c1_alias(self, concept: str) -> bool:
+        existing = {c.name.upper() for c in self.c1c2.c1_vocabulary}
+        return concept.upper() in existing
+
+    def _route_requests(self, decision) -> None:
+        kept, dropped = sanitize_requests(decision.requests)
+        if dropped:
+            self._pending_prompt_note = f"(Dropped malformed requests: {dropped})"
+        for r in kept:
+            up = r.upper()
+            if up.startswith("EXPAND:"):
+                body = r.split(":", 1)[1].strip()
+                concept = body.split()[0] if body else ""
+                if not concept:
+                    continue
+                if self.config.gated_expansion:
+                    granted, msg = self.expansion_gate.try_expand(
+                        concept, self.ledger, self._tick, is_alias=self._is_c1_alias
+                    )
+                    if granted:
+                        self.c1c2.expand_c1(concept, body, tick=self._tick)
+                    else:
+                        self._pending_prompt_note = msg
+                        self.incidents.log("EXPANSION_DENIED", msg)
+                else:
+                    self.c1c2.expand_c1(concept, body, tick=self._tick)
+            # PROBE:<name> (S7) and HYP:<...> (S4) are no-ops in the S3.5 scope.
+
+    def play_game(self, game_id: str, max_actions: int = 200,
+                  record_path: Optional[str] = None):
         """Play a real ARC-AGI-3 game via the SDK.
 
         Parameters
@@ -281,6 +540,9 @@ class LLMAgent:
             Arcade game identifier (e.g. 'ls20').
         max_actions : int
             Maximum number of actions before stopping.
+        record_path : str, optional
+            If set, record per-tick {tick, grid, action, available_actions,
+            score} to this JSON path (episode fixture, guide §2.6).
 
         Returns
         -------
@@ -304,9 +566,20 @@ class LLMAgent:
         self._levels_completed = 0
         self._available_actions = getattr(frame, 'available_actions', [1, 2, 3, 4])
 
+        # Route incidents to a per-run log under PROFILE_PATH6 (ground rule 9).
+        if self.config.structured_decisions:
+            import datetime
+            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            self.incidents = IncidentLog(f"runs/{game_id}/{ts}/incidents.log")
+
+        recorder = _EpisodeRecorder(game_id, record_path) if record_path else None
+
         for step in range(max_actions):
             grid = self._parse_observation(frame)
-            action = self.act(grid)
+            cur_score = self._extract_score(frame)
+            action = self.act(grid, score=cur_score)
+            if recorder is not None:
+                recorder.add(step + 1, grid, action, list(self._available_actions), cur_score)
 
             # Log what the LLM decided — include position + goal distance
             h = self.c1c2.hypotheses[-1] if self.c1c2.hypotheses else None
@@ -351,6 +624,9 @@ class LLMAgent:
 
         scorecard = arcade.get_scorecard()
         print(f"[LLMAgent] Done. Levels: {self._levels_completed}")
+        if recorder is not None:
+            path = recorder.save()
+            print(f"[LLMAgent] Episode recorded -> {path}")
         return {
             'game_id': game_id,
             'levels_completed': self._levels_completed,
@@ -359,6 +635,14 @@ class LLMAgent:
         }
 
     # ---- internal ----------------------------------------------------------
+
+    @staticmethod
+    def _extract_score(frame) -> int:
+        for attr in ("score", "total_score", "points"):
+            val = getattr(frame, attr, None)
+            if isinstance(val, (int, float)):
+                return int(val)
+        return 0
 
     def _parse_observation(self, obs) -> np.ndarray:
         """Parse SDK observation to numpy grid."""
